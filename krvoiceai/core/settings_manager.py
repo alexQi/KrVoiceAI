@@ -39,6 +39,12 @@ SENSITIVE_PATHS = {
 # 各 provider 的预设配置（前端下拉选择时使用）
 PROVIDER_PRESETS = {
     "llm": {
+        "agnes": {
+            "label": "Agnes AI（免费，agnes-2.0-flash）",
+            "base_url": "https://apihub.agnes-ai.com/v1",
+            "models": ["agnes-2.0-flash", "agnes-1.5-flash"],
+            "api_key_url": "https://platform.agnes-ai.com",
+        },
         "deepseek": {
             "label": "DeepSeek 深度求索",
             "base_url": "https://api.deepseek.com/v1",
@@ -77,6 +83,14 @@ PROVIDER_PRESETS = {
         },
     },
     "tts": {
+        "mimo": {
+            "label": "小米 MiMo TTS（mimo-v2.5-tts，免费）",
+            "needs_api_base": True,
+            "needs_api_key": True,
+            "default_api_base": "https://token-plan-cn.xiaomimimo.com/v1",
+            "models": ["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"],
+            "voices": ["mimo_default"],
+        },
         "gpt_sovits": {
             "label": "GPT-SoVITS 云端（声音克隆）",
             "needs_api_base": True,
@@ -124,6 +138,13 @@ PROVIDER_PRESETS = {
         },
     },
     "asr": {
+        "mimo": {
+            "label": "小米 MiMo ASR（mimo-v2.5-asr，免费）",
+            "models": ["mimo-v2.5-asr"],
+            "needs_api_base": True,
+            "needs_api_key": True,
+            "default_api_base": "https://token-plan-cn.xiaomimimo.com/v1",
+        },
         "funasr": {
             "label": "FunASR（本地，paraformer-zh）",
             "models": ["paraformer-zh", "paraformer-zh-streaming", "conformer-zh"],
@@ -626,6 +647,41 @@ class SettingsManager:
         if "****" in api_key:
             cfg = get_config()
             api_key = cfg.get("tts.api_key", "")
+
+        # MiMo TTS：调用 chat/completions 端点合成短文本验证
+        if provider == "mimo":
+            import base64
+            import time as _time
+            mimo_model = get_config().get("tts.mimo_model", "mimo-v2.5-tts")
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            test_payload = {
+                "model": mimo_model,
+                "messages": [{"role": "assistant", "content": "测试"}],
+                "audio": {"format": "mp3", "voice": "mimo_default"},
+                "stream": False,
+            }
+            try:
+                t0 = _time.time()
+                r = httpx.post(
+                    f"{api_base}/chat/completions",
+                    json=test_payload, headers=headers, timeout=30,
+                )
+                elapsed = (_time.time() - t0) * 1000
+                if r.status_code == 200:
+                    data = r.json()
+                    audio_data = data.get("choices", [{}])[0].get("message", {}).get("audio", {}).get("data", "")
+                    if audio_data:
+                        audio_bytes = base64.b64decode(audio_data)
+                        return {
+                            "success": True,
+                            "message": f"MiMo TTS 连接成功，合成 {len(audio_bytes)} 字节音频",
+                            "elapsed_ms": round(elapsed),
+                            "model": mimo_model,
+                        }
+                    return {"success": False, "message": "MiMo TTS 响应中无音频数据", "elapsed_ms": round(elapsed)}
+                return {"success": False, "message": f"MiMo TTS 返回 HTTP {r.status_code}: {r.text[:200]}", "elapsed_ms": round(elapsed)}
+            except Exception as e:
+                return {"success": False, "message": f"MiMo TTS 连接失败: {e}"}
 
         # GPT-SoVITS 健康检查：尝试 GET 根路径或 /health
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}

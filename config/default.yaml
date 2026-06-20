@@ -30,11 +30,13 @@ llm:
 
 # TTS 配置（声音克隆）
 tts:
-  provider: gpt_sovits  # gpt_sovits / edge_tts / mock
+  provider: gpt_sovits  # mimo / gpt_sovits / edge_tts / mock
   # GPT-SoVITS 云端服务地址
   api_base: http://localhost:9880
   api_key: ""
   timeout: 120
+  # MiMo TTS 配置（provider=mimo 时使用）
+  mimo_model: mimo-v2.5-tts
   # edge-tts 降级配置
   edge_voice: zh-CN-XiaoxiaoNeural
   # 音色库目录
@@ -57,11 +59,16 @@ avatar:
 
 # ASR 配置（字幕/文案提取）
 asr:
-  provider: funasr  # funasr / whisper / mock
+  provider: funasr  # mimo / funasr / whisper / mock
   model: paraformer-zh
   # 本地运行时模型缓存目录
   model_cache: ./workspace_data/models/asr
   language: zh
+  # MiMo ASR 配置（provider=mimo 时使用）
+  api_base: https://token-plan-cn.xiaomimimo.com/v1
+  api_key: ""
+  mimo_model: mimo-v2.5-asr
+  timeout: 120
   # 字幕基础样式
   subtitle:
     font_size: 24

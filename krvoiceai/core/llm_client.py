@@ -1,7 +1,8 @@
 """LLM 客户端
 
-统一封装 DeepSeek / Qwen / OpenAI 等 OpenAI 兼容 API。
+统一封装 DeepSeek / Qwen / OpenAI / Agnes 等 OpenAI 兼容 API。
 无 API key 时自动降级为 mock 模式，保证流程可跑通。
+内置 429 限流重试机制。
 """
 from __future__ import annotations
 
@@ -17,6 +18,10 @@ from .logger import get_logger
 
 class LLMClient:
     """OpenAI 兼容 LLM 客户端"""
+
+    # 429 限流重试配置
+    MAX_RETRIES = 3
+    RETRY_BASE_DELAY = 2.0  # 基础延迟秒数，指数退避
 
     def __init__(self, provider: str | None = None):
         cfg = get_config()
@@ -39,7 +44,10 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """调用 chat completion，返回助手消息文本"""
+        """调用 chat completion，返回助手消息文本
+
+        内置 429 限流重试（指数退避），最多重试 MAX_RETRIES 次。
+        """
         if self.is_mock:
             return self._mock_response(messages)
 
@@ -57,23 +65,60 @@ class LLMClient:
         }
 
         start = time.time()
-        try:
-            r = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
-            r.raise_for_status()
-            data = r.json()
-            content = data["choices"][0]["message"]["content"]
-            self.logger.debug(
-                f"LLM 调用成功 provider={self.provider} "
-                f"model={self.model} 耗时={time.time()-start:.2f}s "
-                f"tokens={data.get('usage', {})}"
-            )
-            return content.strip()
-        except httpx.HTTPStatusError as e:
-            self.logger.error(f"LLM HTTP 错误: {e.response.status_code} {e}")
-            raise
-        except Exception as e:
-            self.logger.error(f"LLM 调用异常: {e}")
-            raise
+        last_error: Exception | None = None
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                r = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+
+                # 429 限流：等待后重试
+                if r.status_code == 429 and attempt < self.MAX_RETRIES:
+                    delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                    self.logger.warning(
+                        f"LLM 限流 429，第 {attempt+1}/{self.MAX_RETRIES} 次重试，"
+                        f"等待 {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                    continue
+
+                r.raise_for_status()
+                data = r.json()
+                content = data["choices"][0]["message"]["content"]
+                self.logger.debug(
+                    f"LLM 调用成功 provider={self.provider} "
+                    f"model={self.model} 耗时={time.time()-start:.2f}s "
+                    f"tokens={data.get('usage', {})}"
+                )
+                return content.strip()
+
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                # 5xx 服务端错误也重试
+                if e.response.status_code >= 500 and attempt < self.MAX_RETRIES:
+                    delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                    self.logger.warning(
+                        f"LLM 服务端错误 {e.response.status_code}，"
+                        f"第 {attempt+1}/{self.MAX_RETRIES} 次重试，等待 {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                    continue
+                self.logger.error(f"LLM HTTP 错误: {e.response.status_code} {e}")
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < self.MAX_RETRIES:
+                    delay = self.RETRY_BASE_DELAY * (2 ** attempt)
+                    self.logger.warning(
+                        f"LLM 调用异常，第 {attempt+1}/{self.MAX_RETRIES} 次重试，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    continue
+                self.logger.error(f"LLM 调用异常: {e}")
+                raise
+
+        # 所有重试失败
+        raise RuntimeError(f"LLM 调用失败，已重试 {self.MAX_RETRIES} 次: {last_error}")
 
     def _mock_response(self, messages: list[dict[str, str]]) -> str:
         """Mock 模式：根据 system/user 提示返回模板化内容"""

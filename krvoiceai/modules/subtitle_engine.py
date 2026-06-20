@@ -1,6 +1,7 @@
 """字幕生成模块
 
-两种 provider：
+三种 provider：
+- mimo:   调用小米 MiMo ASR API（OpenAI 兼容 chat/completions 端点）
 - funasr: 调用 FunASR 服务（本地 HTTP API）进行语音识别 + 时间戳对齐
 - mock:   优先复用 TTS 时间戳，否则按文本长度估算
 
@@ -8,6 +9,7 @@
 """
 from __future__ import annotations
 
+import base64
 import time
 from pathlib import Path
 from typing import Any
@@ -60,9 +62,22 @@ class SubtitleEngine(BaseModule):
         self.model = self.config.get("asr.model", "paraformer-zh")
         self.language = self.config.get("asr.language", "zh")
         self.max_chars = self.config.get("asr.subtitle.max_chars_per_line", 18)
+        # MiMo ASR 配置
+        self.mimo_api_base = self.config.get("asr.api_base", "")
+        self.mimo_api_key = self.config.get("asr.api_key", "")
+        self.mimo_model = self.config.get("asr.mimo_model", "mimo-v2.5-asr")
+        self.timeout = self.config.get("asr.timeout", 120)
 
     def setup(self) -> None:
-        if self.provider == "funasr":
+        if self.provider == "mimo":
+            if not self.mimo_api_key or not self.mimo_api_base:
+                self.logger.warning(
+                    "MiMo ASR 未配置 api_key/api_base，降级到 mock 模式"
+                )
+                self.provider = "mock"
+            else:
+                self.logger.info(f"MiMo ASR 模式 model={self.mimo_model}")
+        elif self.provider == "funasr":
             # 检查 FunASR 是否可用（尝试 import）
             try:
                 import funasr  # noqa: F401
@@ -87,7 +102,9 @@ class SubtitleEngine(BaseModule):
         output_path = ctx.work_dir / "subtitle.srt"
 
         try:
-            if self.provider == "funasr" and self._funasr_available:
+            if self.provider == "mimo":
+                segments = self._recognize_mimo(ctx)
+            elif self.provider == "funasr" and self._funasr_available:
                 segments = self._recognize_funasr(ctx)
             else:
                 segments = self._generate_mock(ctx)
@@ -109,6 +126,56 @@ class SubtitleEngine(BaseModule):
             )
         except Exception as e:
             return ModuleResult(success=False, error=str(e))
+
+    def _recognize_mimo(self, ctx: JobContext) -> list[dict]:
+        """使用小米 MiMo ASR 识别音频
+
+        MiMo ASR 特点：
+        - 端点：{api_base}/chat/completions
+        - 音频以 data URL 格式传入（data:audio/mp3;base64,...）
+        - 不接受 text 部分（网关注入）
+        - 返回识别文本在 choices[0].message.content
+        - 不返回时间戳，需按文本长度估算
+        """
+        self.logger.info(f"MiMo ASR 识别音频: {ctx.audio_path}")
+
+        # 读取音频并转 base64 data URL
+        audio_path = ctx.audio_path
+        audio_bytes = audio_path.read_bytes()
+        # 判断格式
+        ext = audio_path.suffix.lower().lstrip(".")
+        mime = "audio/wav" if ext == "wav" else "audio/mp3"
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+        data_url = f"data:{mime};base64,{audio_b64}"
+
+        payload = {
+            "model": self.mimo_model,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "input_audio", "input_audio": {"data": data_url, "format": ext or "mp3"}}
+                ]}
+            ],
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.mimo_api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.mimo_api_base.rstrip('/')}/chat/completions"
+
+        r = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+        r.raise_for_status()
+        data = r.json()
+
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content:
+            self.logger.warning("MiMo ASR 返回空内容，降级到 mock")
+            return self._generate_mock(ctx)
+
+        self.logger.info(f"MiMo ASR 识别结果: {content[:100]}...")
+
+        # MiMo ASR 不返回时间戳，按文本长度估算
+        return self._split_text_by_duration(content, ctx.audio_duration)
 
     def _recognize_funasr(self, ctx: JobContext) -> list[dict]:
         """使用 FunASR 识别音频并生成带时间戳的分句"""

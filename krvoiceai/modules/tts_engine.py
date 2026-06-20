@@ -1,11 +1,12 @@
 """TTS 声音克隆模块
 
-三种 provider：
+四种 provider：
+- mimo:       调用小米 MiMo TTS API（OpenAI 兼容 chat/completions 端点）
 - gpt_sovits: 调用云端 GPT-SoVITS API（声音克隆）
 - edge_tts:   使用 edge-tts 标准音色（无克隆，CPU 可跑）
 - mock:       生成静音 wav（保证流程可跑通）
 
-输出：wav 音频文件 + 时长 + 分句时间戳
+输出：wav/mp3 音频文件 + 时长 + 分句时间戳
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from ..core.audio_utils import (
     estimate_speech_duration,
@@ -36,9 +39,11 @@ class TTSEngine(BaseModule):
         super().__init__(config)
         self.provider = self.config.get("tts.provider", "mock")
         self.api_base = self.config.get("tts.api_base", "")
+        self.api_key = self.config.get("tts.api_key", "")
         self.edge_voice = self.config.get("tts.edge_voice", "zh-CN-XiaoxiaoNeural")
         self.voices_dir = Path(self.config.get("tts.voices_dir", "./config/voices"))
         self.default_voice = self.config.get("tts.default_voice", "default")
+        self.timeout = self.config.get("tts.timeout", 120)
         self.gpu = gpu_runner or GPURunner()
 
     def setup(self) -> None:
@@ -64,7 +69,11 @@ class TTSEngine(BaseModule):
 
         try:
             start = time.time()
-            if self.provider == "gpt_sovits":
+            if self.provider == "mimo":
+                audio_path, duration, timestamps = self._synth_mimo(
+                    text, voice_id, output_path
+                )
+            elif self.provider == "gpt_sovits":
                 audio_path, duration, timestamps = self._synth_gpt_sovits(
                     text, voice_id, output_path
                 )
@@ -94,6 +103,99 @@ class TTSEngine(BaseModule):
             )
         except Exception as e:
             return ModuleResult(success=False, error=str(e))
+
+    def _synth_mimo(
+        self, text: str, voice_id: str, output_path: Path
+    ) -> tuple[Path, float, list[dict]]:
+        """调用小米 MiMo TTS API（OpenAI 兼容 chat/completions 端点）
+
+        MiMo TTS 特点：
+        - 端点：{api_base}/chat/completions
+        - 文本放在 assistant 角色消息中
+        - 音色和格式放在 audio 对象中
+        - 返回 base64 编码音频在 choices[0].message.audio.data
+        """
+        self.logger.info(f"MiMo TTS 合成 voice={voice_id} text_len={len(text)}")
+
+        # MiMo 单次合成有长度限制，分句合成
+        segments = split_text_to_segments(text, max_chars=300)
+        timestamps: list[dict] = []
+        combined_audio = bytearray()
+        offset = 0.0
+
+        # 音色映射：voice_id -> mimo voice
+        mimo_voice = voice_id if voice_id != "default" else "mimo_default"
+
+        for seg in segments:
+            payload = {
+                "model": self.config.get("tts.mimo_model", "mimo-v2.5-tts"),
+                "messages": [
+                    {"role": "assistant", "content": seg}
+                ],
+                "audio": {
+                    "format": "mp3",
+                    "voice": mimo_voice,
+                },
+                "stream": False,
+            }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            url = f"{self.api_base.rstrip('/')}/chat/completions"
+
+            r = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+            r.raise_for_status()
+            data = r.json()
+
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError(f"MiMo TTS 返回无 choices: {data}")
+
+            audio_info = choices[0].get("message", {}).get("audio", {})
+            audio_b64 = audio_info.get("data")
+            if not audio_b64:
+                raise RuntimeError(f"MiMo TTS 返回无音频数据: {choices[0]}")
+
+            audio_bytes = base64.b64decode(audio_b64)
+            combined_audio.extend(audio_bytes)
+
+            # 估算该段时长（MiMo 不返回时间戳）
+            seg_duration = estimate_speech_duration(seg)
+            timestamps.append({
+                "text": seg,
+                "start": round(offset, 3),
+                "end": round(offset + seg_duration, 3),
+            })
+            offset += seg_duration
+
+        # 保存为 mp3（MiMo 返回 mp3 格式）
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        mp3_path = output_path.with_suffix(".mp3")
+        mp3_path.write_bytes(bytes(combined_audio))
+
+        # 尝试用 ffmpeg 转 wav，失败则用 mp3
+        try:
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(mp3_path), "-acodec", "pcm_s16le",
+                 "-ar", "16000", "-ac", "1", str(output_path)],
+                capture_output=True, timeout=30,
+            )
+            if output_path.exists():
+                mp3_path.unlink(missing_ok=True)
+                final_path = output_path
+            else:
+                final_path = mp3_path
+        except Exception:
+            final_path = mp3_path
+
+        duration = get_wav_duration(final_path) if final_path.suffix == ".wav" else offset
+
+        self.logger.info(
+            f"MiMo TTS 合成完成 duration={duration:.2f}s segments={len(segments)}"
+        )
+        return final_path, duration, timestamps
 
     def _synth_gpt_sovits(
         self, text: str, voice_id: str, output_path: Path

@@ -135,6 +135,10 @@ class KrVoiceAI:
 
         Args:
             progress_callback: 可选的进度回调函数 (step_name, status, data)
+
+        Returns:
+            包含 job_id/success/elapsed/stages/video_path/subtitle_path/title/cover_path 等
+            用户友好字段的结果字典
         """
         meta = {"platform": platform, "auto_publish": auto_publish}
         if metadata:
@@ -148,14 +152,42 @@ class KrVoiceAI:
             script_mode=script_mode,
             metadata=meta,
         )
+        import time as _time
+        t0 = _time.time()
         success = self.orchestrator.run_job(job_id, progress_callback=progress_callback)
+        elapsed = _time.time() - t0
         job = self.orchestrator.get_status(job_id)
+        output = job.get("output", {}) or {}
+
+        # 构建 stages 列表（保留执行顺序与耗时）
+        stages = []
+        for s in job.get("steps", []):
+            stages.append({
+                "step": s.get("step"),
+                "status": s.get("status"),
+                "elapsed": s.get("duration", 0) or 0,
+                "result": s.get("result"),
+                "error": s.get("error"),
+            })
+
         return {
             "job_id": job_id,
             "success": success,
             "status": job["status"],
-            "output": job.get("output", {}),
+            "elapsed": round(elapsed, 2),
             "error": job.get("error"),
+            # 用户友好的顶层输出字段
+            "video_path": output.get("final_video"),
+            "audio_path": output.get("audio_path"),
+            "audio_duration": output.get("audio_duration"),
+            "subtitle_path": output.get("subtitle"),
+            "title": output.get("title"),
+            "cover_path": output.get("cover"),
+            "script_text": output.get("script_text"),
+            # 完整阶段执行详情
+            "stages": stages,
+            # 原始输出（向后兼容）
+            "output": output,
             "steps": {s["step"]: {"status": s["status"], "result": s.get("result")}
                       for s in job.get("steps", [])},
         }
@@ -280,21 +312,37 @@ class KrVoiceAI:
         return result
 
     def list_voices(self) -> list[dict]:
-        """列出所有已注册的音色"""
+        """列出所有可用音色（含已注册音色 + 当前 provider 默认音色）"""
         voices_dir = Path(self.config.get("tts.voices_dir", "./config/voices"))
         result = []
-        if not voices_dir.exists():
-            return result
-        for d in sorted(voices_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            info = {"voice_id": d.name}
-            for ext in (".wav", ".mp3", ".flac"):
-                samples = list(d.glob(f"*{ext}"))
-                if samples:
-                    info["sample"] = str(samples[0])
-                    break
-            result.append(info)
+        seen_ids = set()
+
+        # 1. 当前 provider 的默认音色（确保用户始终能看到可选音色）
+        provider = self.config.get("tts.provider", "mock")
+        default_voice = self.config.get("tts.default_voice", "default")
+        if default_voice and default_voice not in seen_ids:
+            result.append({
+                "voice_id": default_voice,
+                "type": "provider_default",
+                "provider": provider,
+            })
+            seen_ids.add(default_voice)
+
+        # 2. 已注册的自定义音色（用户上传的音色样本）
+        if voices_dir.exists():
+            for d in sorted(voices_dir.iterdir()):
+                if not d.is_dir():
+                    continue
+                if d.name in seen_ids:
+                    continue
+                info = {"voice_id": d.name, "type": "custom", "provider": provider}
+                for ext in (".wav", ".mp3", ".flac"):
+                    samples = list(d.glob(f"*{ext}"))
+                    if samples:
+                        info["sample"] = str(samples[0])
+                        break
+                result.append(info)
+                seen_ids.add(d.name)
         return result
 
     def register_avatar(self, avatar_id: str, reference_video: Path) -> bool:
@@ -313,10 +361,17 @@ class KrVoiceAI:
 
     def health_check(self) -> dict:
         """系统健康检查"""
+        ffmpeg_ok = self.ffmpeg.available()
+        gpu_tts_ok = self.gpu.health_check_tts()
+        gpu_avatar_ok = self.gpu.health_check_avatar()
+        # 综合状态：ffmpeg 必须可用；LLM/TTS/Avatar 允许 mock 降级
+        overall_ok = ffmpeg_ok
         return {
-            "ffmpeg": self.ffmpeg.available(),
-            "gpu_tts": self.gpu.health_check_tts(),
-            "gpu_avatar": self.gpu.health_check_avatar(),
+            "status": "ok" if overall_ok else "degraded",
+            "version": self.config.get("project.version", "unknown"),
+            "ffmpeg": ffmpeg_ok,
+            "gpu_tts": gpu_tts_ok,
+            "gpu_avatar": gpu_avatar_ok,
             "llm_mock": self.llm.is_mock,
             "avatars_count": len(self.list_avatars()),
             "voices_count": len(self.list_voices()),

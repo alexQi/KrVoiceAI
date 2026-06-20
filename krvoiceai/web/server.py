@@ -259,7 +259,8 @@ def create_app() -> FastAPI:
     async def get_settings_section(section: str):
         """获取某段配置"""
         if section not in ("llm", "tts", "avatar", "asr", "composer",
-                           "cover", "publisher", "pipeline", "project", "logging"):
+                           "cover", "publisher", "pipeline", "project", "logging",
+                           "subtitle", "scene", "audio", "effects"):
             raise HTTPException(400, f"无效的配置段: {section}")
         return get_settings_manager().get_section(section, mask_sensitive=True)
 
