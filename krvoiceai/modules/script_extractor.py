@@ -4,7 +4,7 @@
 
 流程：
 1. yt-dlp 下载视频（仅音频流，节省带宽）
-2. FunASR 转写为带标点文本
+2. ASR 转写为带标点文本（支持 MiMo ASR / FunASR）
 3. 文本清洗（去语气词、合并断句）
 
 合规说明：仅支持用户手动提供链接，不做批量爬取；
@@ -14,12 +14,15 @@ mock 模式：不下载，返回模拟的口播文案。
 """
 from __future__ import annotations
 
+import base64
 import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.ffmpeg_utils import FFmpegRunner
@@ -43,14 +46,27 @@ class ScriptExtractor(BaseModule):
         self.asr_provider = self.config.get("asr.provider", "mock")
         self.ffmpeg = ffmpeg or FFmpegRunner()
         self._ytdlp_available: Optional[bool] = None
+        # MiMo ASR 配置
+        self.mimo_api_base = self.config.get("asr.api_base", "")
+        self.mimo_api_key = self.config.get("asr.api_key", "")
+        self.mimo_model = self.config.get("asr.mimo_model", "mimo-v2.5-asr")
+        self.timeout = self.config.get("asr.timeout", 120)
 
     def setup(self) -> None:
         self._ytdlp_available = shutil.which("yt-dlp") is not None
         if not self._ytdlp_available:
             self.logger.warning("yt-dlp 未安装，将使用 mock 模式提取文案")
-        self.logger.info(
-            f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}"
-        )
+        # 检查 ASR provider 是否可用
+        if self.asr_provider == "mimo":
+            if not self.mimo_api_key or not self.mimo_api_base:
+                self.logger.warning("MiMo ASR 未配置 api_key/api_base，降级到 mock 模式")
+                self.asr_provider = "mock"
+            else:
+                self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=mimo/{self.mimo_model}")
+        elif self.asr_provider == "funasr":
+            self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=funasr")
+        else:
+            self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=mock")
         super().setup()
 
     def run(self, ctx: JobContext) -> ModuleResult:
@@ -64,7 +80,9 @@ class ScriptExtractor(BaseModule):
             )
 
         try:
-            if self._ytdlp_available and self.asr_provider == "funasr":
+            # yt-dlp 可用且 ASR provider 支持（mimo/funasr）时走真实提取
+            use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo")
+            if use_real:
                 text = self._extract_real(url, ctx.work_dir)
             else:
                 text = self._extract_mock(url)
@@ -81,7 +99,7 @@ class ScriptExtractor(BaseModule):
                     "script_text": text,
                     "source_url": url,
                     "char_count": len(text),
-                    "mock": not (self._ytdlp_available and self.asr_provider == "funasr"),
+                    "mock": not use_real,
                 },
             )
         except Exception as e:
@@ -89,7 +107,8 @@ class ScriptExtractor(BaseModule):
 
     def extract(self, video_url: str, lang: str = "zh") -> str:
         """直接调用接口：从视频 URL 提取文案"""
-        if self._ytdlp_available and self.asr_provider == "funasr":
+        use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo")
+        if use_real:
             import tempfile
             with tempfile.TemporaryDirectory() as tmp:
                 text = self._extract_real(video_url, Path(tmp))
@@ -98,15 +117,14 @@ class ScriptExtractor(BaseModule):
         return self._clean_text(text)
 
     def _extract_real(self, url: str, work_dir: Path) -> str:
-        """真实提取：yt-dlp 下载 + FunASR 转写"""
+        """真实提取：yt-dlp 下载 + ASR 转写（支持 MiMo / FunASR）"""
         self.logger.info(f"下载视频音频: {url}")
-        audio_path = work_dir / "ref_audio.wav"
 
         # yt-dlp 下载音频
         cmd = [
             "yt-dlp",
             "-x",                       # 仅提取音频
-            "--audio-format", "wav",
+            "--audio-format", "mp3",
             "-o", str(work_dir / "ref.%(ext)s"),
             "--no-playlist",
             "--no-warnings",
@@ -121,8 +139,59 @@ class ScriptExtractor(BaseModule):
         if not audio_files:
             raise RuntimeError("下载后未找到音频文件")
         audio_path = audio_files[0]
+        self.logger.info(f"下载完成: {audio_path.name} ({audio_path.stat().st_size // 1024}KB)")
 
-        # FunASR 转写
+        # 根据 provider 选择 ASR
+        if self.asr_provider == "mimo":
+            return self._transcribe_mimo(audio_path)
+        else:
+            return self._transcribe_funasr(audio_path)
+
+    def _transcribe_mimo(self, audio_path: Path) -> str:
+        """使用 MiMo ASR 转写音频为文本
+
+        MiMo ASR 端点：{api_base}/chat/completions
+        - 音频以 data URL 格式传入（data:audio/mp3;base64,...）
+        - 不接受 text 部分（网关注入）
+        - 返回识别文本在 choices[0].message.content
+        """
+        self.logger.info(f"MiMo ASR 转写: {audio_path.name}")
+
+        audio_bytes = audio_path.read_bytes()
+        ext = audio_path.suffix.lower().lstrip(".")
+        mime = "audio/wav" if ext == "wav" else "audio/mp3"
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+        data_url = f"data:{mime};base64,{audio_b64}"
+
+        payload = {
+            "model": self.mimo_model,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "input_audio", "input_audio": {"data": data_url, "format": ext or "mp3"}}
+                ]}
+            ],
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.mimo_api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.mimo_api_base.rstrip('/')}/chat/completions"
+
+        r = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+        r.raise_for_status()
+        data = r.json()
+
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content:
+            self.logger.warning("MiMo ASR 返回空内容，降级到 mock")
+            return self._extract_mock(str(audio_path))
+
+        self.logger.info(f"MiMo ASR 转写结果: {content[:100]}...")
+        return content
+
+    def _transcribe_funasr(self, audio_path: Path) -> str:
+        """使用 FunASR 转写音频为文本"""
         self.logger.info(f"FunASR 转写: {audio_path}")
         from funasr import AutoModel
         model = AutoModel(
