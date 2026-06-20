@@ -1344,11 +1344,65 @@
       <div class="page" id="page-templates">
         <div class="page-header">
           <h1 class="page-title">模板中心</h1>
-          <p class="page-subtitle">一键应用创作模板，快速套用字幕/BGM/情感/滤镜/转场全套样式</p>
+          <p class="page-subtitle">场景化一键创作：选场景 → 填内容 → 生成视频。对标腾讯智影/万兴播爆的"点点点"创作模式</p>
         </div>
+
+        <!-- 场景化模板（核心：选模板→填内容→生成） -->
         <div class="card">
           <div class="card-header">
-            <div class="card-title"><span class="card-title-icon">🎨</span> 创作模板库</div>
+            <div class="card-title"><span class="card-title-icon">🎬</span> 场景化创作模板</div>
+            <button class="btn btn-sm btn-secondary" id="refresh-scene-templates-btn">🔄 刷新</button>
+          </div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+            每个模板预置了该场景的口播文案骨架、字幕样式、BGM、滤镜、转场、情感、语速。选择场景后填入关键词即可生成完整文案，一键应用全部样式。
+          </div>
+          <div class="template-grid" id="scene-templates-grid"></div>
+        </div>
+
+        <!-- 场景模板详情与文案填充弹窗 -->
+        <div class="modal-overlay" id="scene-modal" style="display:none">
+          <div class="modal" style="max-width:680px">
+            <div class="modal-header">
+              <div class="modal-title" id="scene-modal-title">场景创作</div>
+              <button class="modal-close" onclick="closeSceneModal()">×</button>
+            </div>
+            <div class="modal-body" id="scene-modal-body" style="max-height:60vh;overflow-y:auto"></div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeSceneModal()">取消</button>
+              <button class="btn btn-primary" id="scene-generate-btn" onclick="generateSceneScript()">生成文案</button>
+              <button class="btn btn-primary" id="scene-apply-style-btn" onclick="applySceneStyle()">一键应用样式</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 预制形象库 -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-title-icon">👤</span> 预制数字人形象库</div>
+            <button class="btn btn-sm btn-secondary" id="refresh-preset-avatars-btn">🔄 刷新</button>
+          </div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+            预制形象可直接选用，搭配推荐音色。点击"使用此形象"将设为默认形象（建议上传真人照片替换占位图以获最佳效果）。
+          </div>
+          <div class="preset-avatar-grid" id="preset-avatars-grid"></div>
+        </div>
+
+        <!-- 预制音色库 -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-title-icon">🎙️</span> 预制音色库</div>
+            <button class="btn btn-sm btn-secondary" id="refresh-preset-voices-btn">🔄 刷新</button>
+          </div>
+          <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
+            基于 Edge TTS 的免费音色，按场景推荐。点击"使用此音色"将设为默认音色。
+          </div>
+          <div class="preset-voice-grid" id="preset-voices-grid"></div>
+        </div>
+
+        <!-- 原有创作模板（样式模板） -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-title-icon">🎨</span> 样式模板库（字幕/BGM/滤镜/转场）</div>
             <button class="btn btn-sm btn-secondary" id="refresh-templates-btn">🔄 刷新</button>
           </div>
           <div class="template-grid" id="templates-grid"></div>

@@ -471,6 +471,180 @@ def create_app() -> FastAPI:
         cfg = _get_app().config
         return cfg.get("bgm_library", {}) or {}
 
+    # ============ 场景化预制模板 API（对标腾讯智影/万兴播爆） ============
+
+    @app.get("/api/scene/templates")
+    async def get_scene_templates():
+        """获取场景化预制模板列表（含文案骨架、样式推荐、形象/音色推荐）"""
+        import yaml
+        from pathlib import Path as _Path
+        tpl_file = _Path("./config/presets/scene_templates.yaml")
+        if not tpl_file.exists():
+            return {"templates": {}}
+        with open(tpl_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        templates = data.get("templates", {})
+        # 返回精简信息（不含完整文案骨架，按需获取）
+        result = {}
+        for tid, tpl in templates.items():
+            result[tid] = {
+                "label": tpl.get("label", tid),
+                "icon": tpl.get("icon", "📋"),
+                "category": tpl.get("category", "其他"),
+                "description": tpl.get("description", ""),
+                "placeholders": list(tpl.get("placeholders", {}).keys()),
+                "style": tpl.get("style", {}),
+                "avatar_scene": tpl.get("avatar_scene", {}),
+            }
+        return {"templates": result}
+
+    @app.get("/api/scene/templates/{template_id}")
+    async def get_scene_template_detail(template_id: str):
+        """获取单个场景模板详情（含完整文案骨架）"""
+        import yaml
+        from pathlib import Path as _Path
+        tpl_file = _Path("./config/presets/scene_templates.yaml")
+        if not tpl_file.exists():
+            return {"success": False, "error": "模板文件不存在"}
+        with open(tpl_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        templates = data.get("templates", {})
+        if template_id not in templates:
+            return {"success": False, "error": f"模板 {template_id} 不存在"}
+        return {"success": True, "template": templates[template_id]}
+
+    @app.post("/api/scene/fill-script")
+    async def fill_scene_script(req: dict):
+        """根据场景模板和占位符填充值，生成完整文案
+
+        Body: {"template_id": "product_selling", "values": {"product_name": "蓝牙耳机", ...}}
+        """
+        import yaml
+        from pathlib import Path as _Path
+        tpl_file = _Path("./config/presets/scene_templates.yaml")
+        if not tpl_file.exists():
+            return {"success": False, "error": "模板文件不存在"}
+        with open(tpl_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        templates = data.get("templates", {})
+        template_id = req.get("template_id", "")
+        values = req.get("values", {})
+        if template_id not in templates:
+            return {"success": False, "error": f"模板 {template_id} 不存在"}
+        tpl = templates[template_id]
+        script = tpl.get("script_template", "")
+        # 替换占位符 {key} -> values[key]
+        for key, val in values.items():
+            script = script.replace(f"{{{key}}}", str(val))
+        # 检查未填充的占位符
+        import re
+        unfilled = re.findall(r"\{(\w+)\}", script)
+        return {
+            "success": True,
+            "script": script.strip(),
+            "unfilled_placeholders": unfilled,
+            "template_id": template_id,
+        }
+
+    @app.post("/api/scene/apply")
+    async def apply_scene_template(req: dict):
+        """一键应用场景模板：设置样式+BGM+滤镜+转场+情感+语速
+
+        Body: {"template_id": "product_selling"}
+        """
+        import yaml
+        from pathlib import Path as _Path
+        tpl_file = _Path("./config/presets/scene_templates.yaml")
+        if not tpl_file.exists():
+            return {"success": False, "error": "模板文件不存在"}
+        with open(tpl_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        templates = data.get("templates", {})
+        template_id = req.get("template_id", "")
+        if template_id not in templates:
+            return {"success": False, "error": f"模板 {template_id} 不存在"}
+        tpl = templates[template_id]
+        style = tpl.get("style", {})
+        sm = get_settings_manager()
+        applied = []
+
+        # 按配置段分组应用
+        # 1. 字幕样式段
+        sub_updates = {}
+        if "subtitle_preset" in style:
+            sub_updates["preset"] = style["subtitle_preset"]
+        if "subtitle_animation" in style:
+            sub_updates["animation"] = style["subtitle_animation"]
+        if sub_updates:
+            r = sm.update_section("subtitle", sub_updates)
+            if r.get("success"):
+                applied.append("subtitle")
+
+        # 2. 音频段（BGM+情感+语速）
+        audio_updates = {}
+        if "bgm_track" in style:
+            audio_updates["bgm"] = {"enabled": True, "track": style["bgm_track"]}
+        if "emotion" in style:
+            audio_updates["emotion"] = style["emotion"]
+        if "speech_speed" in style:
+            audio_updates["speed"] = style["speech_speed"]
+        if audio_updates:
+            r = sm.update_section("audio", audio_updates)
+            if r.get("success"):
+                applied.append("audio")
+
+        # 3. 效果段（滤镜+转场）
+        effects_updates = {}
+        if "filter" in style:
+            effects_updates["filter"] = style["filter"]
+        if "transition" in style:
+            effects_updates["transition"] = style["transition"]
+        if effects_updates:
+            r = sm.update_section("effects", effects_updates)
+            if r.get("success"):
+                applied.append("effects")
+
+        return {
+            "success": True,
+            "template_id": template_id,
+            "applied_sections": applied,
+            "template": tpl,
+        }
+
+    @app.get("/api/presets/avatars")
+    async def get_preset_avatars():
+        """获取预制数字人形象库"""
+        import yaml
+        from pathlib import Path as _Path
+        lib_file = _Path("./config/presets/avatar_voice_library.yaml")
+        if not lib_file.exists():
+            return {"avatars": {}}
+        with open(lib_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return {"avatars": data.get("avatars", {})}
+
+    @app.get("/api/presets/avatars/{avatar_id}/image")
+    async def get_preset_avatar_image(avatar_id: str):
+        """获取预制形象占位图"""
+        from pathlib import Path as _Path
+        from fastapi.responses import FileResponse
+        img_path = _Path(f"./config/presets/avatars/{avatar_id}.jpg")
+        if not img_path.exists():
+            return {"success": False, "error": "形象图不存在"}
+        return FileResponse(str(img_path), media_type="image/jpeg")
+
+    @app.get("/api/presets/voices")
+    async def get_preset_voices():
+        """获取预制音色库"""
+        import yaml
+        from pathlib import Path as _Path
+        lib_file = _Path("./config/presets/avatar_voice_library.yaml")
+        if not lib_file.exists():
+            return {"voices": {}}
+        with open(lib_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return {"voices": data.get("voices", {})}
+
     @app.post("/api/settings/test/llm")
     async def test_llm(req: TestLLMRequest):
         """测试 LLM 连接"""

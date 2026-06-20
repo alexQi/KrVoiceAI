@@ -86,7 +86,7 @@ function navigate(page) {
   if (page === 'voices') loadVoices();
   if (page === 'health') loadHealth();
   if (page === 'wizard') initWizard();
-  if (page === 'templates') loadTemplatesCenter();
+  if (page === 'templates') { loadTemplatesCenter(); loadSceneTemplates(); loadPresetAvatars(); loadPresetVoices(); }
   if (page === 'generate') { loadAvatarsForSelect(); loadVoicesForSelect(); }
   if (page === 'step-by-step') { loadAvatarsForSelect2(); loadVoicesForSelect2(); }
   if (page === 'batch') { loadAvatarsForSelect3(); loadVoicesForSelect3(); }
@@ -1337,6 +1337,278 @@ async function applyTemplateFromCenter(templateId) {
   }
 }
 
+// ========== 场景化模板中心（对标腾讯智影/万兴播爆） ==========
+
+const sceneState = {
+  templates: {},        // 场景模板列表
+  currentTemplate: null, // 当前选中的模板详情
+  placeholders: {},     // 占位符输入值
+};
+
+// 加载场景模板列表
+async function loadSceneTemplates() {
+  try {
+    const resp = await fetch('/api/scene/templates');
+    const data = await resp.json();
+    sceneState.templates = data.templates || {};
+    const grid = document.getElementById('scene-templates-grid');
+    if (!grid) return;
+    if (Object.keys(sceneState.templates).length === 0) {
+      grid.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">暂无场景模板</div>';
+      return;
+    }
+    grid.innerHTML = Object.entries(sceneState.templates).map(([tid, tpl]) => {
+      const styleTags = [];
+      if (tpl.style) {
+        if (tpl.style.subtitle_preset) styleTags.push(`字幕:${tpl.style.subtitle_preset}`);
+        if (tpl.style.bgm_track) styleTags.push(`BGM:${tpl.style.bgm_track}`);
+        if (tpl.style.filter && tpl.style.filter !== 'none') styleTags.push(`滤镜:${tpl.style.filter}`);
+        if (tpl.style.transition && tpl.style.transition !== 'none') styleTags.push(`转场:${tpl.style.transition}`);
+        if (tpl.style.emotion) styleTags.push(`情感:${tpl.style.emotion}`);
+      }
+      return `
+        <div class="scene-template-card" onclick="openSceneModal('${tid}')">
+          <div class="scene-icon">${tpl.icon || '📋'}</div>
+          <div class="scene-label">${tpl.label}</div>
+          <div class="scene-category">${tpl.category || '其他'}</div>
+          <div class="scene-desc">${tpl.description || ''}</div>
+          <div class="scene-style-tags">
+            ${styleTags.map(t => `<span class="scene-style-tag">${t}</span>`).join('')}
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    toast(`加载场景模板失败: ${e.message}`, 'error');
+  }
+}
+
+// 打开场景模板弹窗（加载详情+占位符输入）
+async function openSceneModal(templateId) {
+  try {
+    const resp = await fetch(`/api/scene/templates/${templateId}`);
+    const data = await resp.json();
+    if (!data.success) {
+      toast(data.error || '加载模板失败', 'error');
+      return;
+    }
+    sceneState.currentTemplate = data.template;
+    sceneState.currentTemplate.id = templateId;
+    sceneState.placeholders = {};
+    const tpl = data.template;
+    document.getElementById('scene-modal-title').textContent = `${tpl.icon || '📋'} ${tpl.label} - 场景创作`;
+    // 渲染占位符输入表单
+    const body = document.getElementById('scene-modal-body');
+    const placeholders = tpl.placeholders || {};
+    let html = `
+      <div style="margin-bottom:16px;padding:12px;background:rgba(16,185,129,0.08);border-left:3px solid #10b981;border-radius:4px;font-size:12px;color:var(--text-secondary);line-height:1.5">
+        <strong>📝 文案骨架：</strong>填入下方关键词，系统将自动生成完整口播文案。每个字段都有示例提示，照着填即可。
+      </div>
+    `;
+    Object.entries(placeholders).forEach(([key, hint]) => {
+      html += `
+        <div class="placeholder-input-group">
+          <label>${key} <span class="placeholder-hint">· ${hint}</span></label>
+          <input type="text" id="ph-${key}" placeholder="${hint}" oninput="sceneState.placeholders['${key}']=this.value">
+        </div>
+      `;
+    });
+    html += `<div id="scene-script-preview" style="display:none"><div style="font-size:12px;font-weight:600;margin-top:12px;margin-bottom:6px">📄 生成文案预览</div><div class="scene-preview-script" id="scene-preview-content"></div></div>`;
+    body.innerHTML = html;
+    document.getElementById('scene-modal').style.display = '';
+  } catch (e) {
+    toast(`打开模板失败: ${e.message}`, 'error');
+  }
+}
+
+function closeSceneModal() {
+  document.getElementById('scene-modal').style.display = 'none';
+  sceneState.currentTemplate = null;
+  sceneState.placeholders = {};
+}
+
+// 生成文案（填充占位符）
+async function generateSceneScript() {
+  if (!sceneState.currentTemplate) return;
+  const tid = sceneState.currentTemplate.id;
+  const values = { ...sceneState.placeholders };
+  // 也从 DOM 读取（防止 oninput 未触发）
+  Object.keys(sceneState.currentTemplate.placeholders || {}).forEach(key => {
+    const el = document.getElementById(`ph-${key}`);
+    if (el && el.value) values[key] = el.value;
+  });
+  const unfilled = Object.keys(sceneState.currentTemplate.placeholders || {}).filter(k => !values[k]);
+  if (unfilled.length > 0) {
+    toast(`请填写: ${unfilled.join(', ')}`, 'error');
+    return;
+  }
+  try {
+    const btn = document.getElementById('scene-generate-btn');
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    const resp = await fetch('/api/scene/fill-script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: tid, values }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      document.getElementById('scene-script-preview').style.display = '';
+      document.getElementById('scene-preview-content').textContent = data.script;
+      // 存储生成的文案供后续使用
+      sceneState.generatedScript = data.script;
+      toast('文案生成成功！可复制使用或一键应用样式后去生成视频', 'success');
+    } else {
+      toast(data.error || '生成失败', 'error');
+    }
+  } catch (e) {
+    toast(`生成失败: ${e.message}`, 'error');
+  } finally {
+    const btn = document.getElementById('scene-generate-btn');
+    btn.disabled = false;
+    btn.textContent = '生成文案';
+  }
+}
+
+// 一键应用场景样式（字幕/BGM/滤镜/转场/情感/语速）
+async function applySceneStyle() {
+  if (!sceneState.currentTemplate) return;
+  const tid = sceneState.currentTemplate.id;
+  try {
+    const btn = document.getElementById('scene-apply-style-btn');
+    btn.disabled = true;
+    btn.textContent = '应用中...';
+    const resp = await fetch('/api/scene/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: tid }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      toast(`样式应用成功！已设置: ${data.applied_sections.join(', ')}`, 'success');
+      // 如果已生成文案，复制到剪贴板并提示去生成页
+      if (sceneState.generatedScript) {
+        try {
+          await navigator.clipboard.writeText(sceneState.generatedScript);
+          toast('文案已复制到剪贴板，去"一键生成"页面粘贴即可', 'success');
+        } catch (e) {
+          // 剪贴板可能被禁用，提示用户手动复制
+        }
+      }
+    } else {
+      toast(data.error || '应用失败', 'error');
+    }
+  } catch (e) {
+    toast(`应用失败: ${e.message}`, 'error');
+  } finally {
+    const btn = document.getElementById('scene-apply-style-btn');
+    btn.disabled = false;
+    btn.textContent = '一键应用样式';
+  }
+}
+
+// 加载预制形象库
+async function loadPresetAvatars() {
+  try {
+    const resp = await fetch('/api/presets/avatars');
+    const data = await resp.json();
+    const grid = document.getElementById('preset-avatars-grid');
+    if (!grid) return;
+    const avatars = data.avatars || {};
+    if (Object.keys(avatars).length === 0) {
+      grid.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">暂无预制形象</div>';
+      return;
+    }
+    grid.innerHTML = Object.entries(avatars).map(([aid, info]) => {
+      const scenes = (info.recommended_scenes || []).slice(0, 3).join('、');
+      return `
+        <div class="preset-avatar-card">
+          <img src="/api/presets/avatars/${aid}/image" alt="${info.label}" onerror="this.style.display='none';this.nextElementSibling.style.display=''">
+          <div class="preset-avatar-icon" style="display:none">${info.icon || '👤'}</div>
+          <div class="preset-avatar-name">${info.label}</div>
+          <div class="preset-avatar-desc">${info.description || ''}</div>
+          <div class="preset-avatar-scenes">适合: ${scenes}</div>
+          <button class="btn btn-sm btn-primary btn-block" onclick="usePresetAvatar('${aid}', '${info.recommended_voice || ''}', '${info.recommended_emotion || ''}')">使用此形象</button>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    toast(`加载预制形象失败: ${e.message}`, 'error');
+  }
+}
+
+// 使用预制形象（设置默认形象+推荐音色+情感）
+async function usePresetAvatar(avatarId, voice, emotion) {
+  try {
+    // 设置推荐音色
+    if (voice) {
+      const resp = await fetch('/api/settings/tts', { method: 'PUT' });
+      const ttsSection = await resp.json();
+      const ttsData = ttsSection.data || {};
+      ttsData.default_voice = voice;
+      if (emotion) ttsData.emotion = emotion;
+      await fetch('/api/settings/tts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ttsData),
+      });
+    }
+    toast(`已设置推荐音色${voice ? ': ' + voice : ''}${emotion ? ' / 情感: ' + emotion : ''}。形象为占位图，请上传真人照片到"形象管理"以获最佳效果`, 'success');
+  } catch (e) {
+    toast(`设置失败: ${e.message}`, 'error');
+  }
+}
+
+// 加载预制音色库
+async function loadPresetVoices() {
+  try {
+    const resp = await fetch('/api/presets/voices');
+    const data = await resp.json();
+    const grid = document.getElementById('preset-voices-grid');
+    if (!grid) return;
+    const voices = data.voices || {};
+    if (Object.keys(voices).length === 0) {
+      grid.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">暂无预制音色</div>';
+      return;
+    }
+    grid.innerHTML = Object.entries(voices).map(([vid, info]) => {
+      const scenes = (info.recommended_scenes || []).slice(0, 3).join('、');
+      return `
+        <div class="preset-voice-card">
+          <div class="preset-voice-icon">${info.gender === 'female' ? '👩' : '👨'}</div>
+          <div class="preset-voice-name">${info.label}</div>
+          <div class="preset-voice-desc">${info.description || ''}</div>
+          <div class="preset-voice-scenes">适合: ${scenes}</div>
+          <button class="btn btn-sm btn-primary btn-block" onclick="usePresetVoice('${vid}')">使用此音色</button>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    toast(`加载预制音色失败: ${e.message}`, 'error');
+  }
+}
+
+// 使用预制音色
+async function usePresetVoice(voiceId) {
+  try {
+    // 先确保 TTS provider 是 edge_tts
+    const getResp = await fetch('/api/settings/tts');
+    const ttsSection = await getResp.json();
+    const ttsData = ttsSection.data || {};
+    ttsData.provider = 'edge_tts';
+    ttsData.default_voice = voiceId;
+    const resp = await fetch('/api/settings/tts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ttsData),
+    });
+    const result = await resp.json();
+    toast(result.success ? `已切换到 Edge TTS 并设置音色: ${voiceId}` : '设置失败', result.success ? 'success' : 'error');
+  } catch (e) {
+    toast(`设置失败: ${e.message}`, 'error');
+  }
+}
+
 // ========== 一键生成页面 ==========
 
 const STEP_INFO = {
@@ -2065,6 +2337,9 @@ document.addEventListener('DOMContentLoaded', () => {
     _templatesCache = null;
     loadTemplatesCenter();
   });
+  document.getElementById('refresh-scene-templates-btn')?.addEventListener('click', loadSceneTemplates);
+  document.getElementById('refresh-preset-avatars-btn')?.addEventListener('click', loadPresetAvatars);
+  document.getElementById('refresh-preset-voices-btn')?.addEventListener('click', loadPresetVoices);
 
   // 首页仪表盘按钮
   document.getElementById('dash-new-video-btn')?.addEventListener('click', () => navigate('wizard'));
