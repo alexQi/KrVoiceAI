@@ -44,6 +44,9 @@ models/
 *.onnx
 *.safetensors
 
+# Wav2Lip 第三方依赖（用户自行克隆，见 README）
+Wav2Lip/
+
 # 配置中的敏感信息
 config/secrets.yaml
 config/.env

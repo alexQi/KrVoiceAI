@@ -172,3 +172,36 @@ class FFmpegRunner:
         ]
         self.run(args)
         return output
+
+    def convert_audio(
+        self,
+        input_audio: Path,
+        output_audio: Path,
+        sample_rate: int = 16000,
+        channels: int = 1,
+    ) -> Path:
+        """将任意音频格式转换为 wav（Wav2Lip 等模型要求）
+
+        Args:
+            input_audio: 输入音频文件（mp3/m4a/aac/wav 等）
+            output_audio: 输出 wav 文件路径
+            sample_rate: 采样率，默认 16000（Wav2Lip 推荐）
+            channels: 声道数，默认单声道
+        """
+        input_audio = Path(input_audio)
+        output_audio = Path(output_audio)
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+        args = [
+            "-i", str(input_audio),
+            "-vn",  # 忽略视频流
+            "-acodec", "pcm_s16le",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            str(output_audio),
+        ]
+        self.run(args)
+        self.logger.debug(
+            f"音频转换: {input_audio.name} -> {output_audio.name} "
+            f"({sample_rate}Hz {channels}ch)"
+        )
+        return output_audio

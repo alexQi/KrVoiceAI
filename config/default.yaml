@@ -45,8 +45,8 @@ tts:
 
 # 数字人配置（口播生成）
 avatar:
-  provider: musetalk  # musetalk / latentsync / echomimic / mock
-  # 云端服务地址
+  provider: wav2lip  # wav2lip / musetalk / latentsync / echomimic / mock
+  # 云端服务地址（musetalk/latentsync 用）
   api_base: http://localhost:8010
   api_key: ""
   timeout: 300
@@ -56,6 +56,14 @@ avatar:
   # 输出视频参数
   output_fps: 25
   output_resolution: [1080, 1920]  # 竖版
+  # Wav2Lip 配置
+  wav2lip:
+    checkpoint_path: ./Wav2Lip/checkpoints/wav2lip.pth
+    face_det_batch_size: 4
+    wav2lip_batch_size: 8
+    pads: [0, 20, 0, 0]  # 上右下左 padding，包含下巴
+    resize_factor: 1
+    nosmooth: false
 
 # ASR 配置（字幕/文案提取）
 asr:

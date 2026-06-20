@@ -206,6 +206,20 @@ def create_app() -> FastAPI:
     async def list_avatars():
         return _get_app().list_avatars()
 
+    @app.get("/api/avatars/{avatar_id}/preview")
+    async def get_avatar_preview(avatar_id: str):
+        """获取数字人参考图预览"""
+        avatars_dir = Path(_get_app().config.get("avatar.avatars_dir", "./config/avatars"))
+        avatar_dir = avatars_dir / avatar_id
+        if not avatar_dir.exists():
+            raise HTTPException(404, "形象不存在")
+        # 查找参考图
+        for name in ("reference.jpg", "reference.png", "preview.jpg", "placeholder.jpg"):
+            p = avatar_dir / name
+            if p.exists():
+                return FileResponse(str(p))
+        raise HTTPException(404, "无参考图")
+
     @app.post("/api/avatars/register")
     async def register_avatar(
         avatar_id: str = Form(...),

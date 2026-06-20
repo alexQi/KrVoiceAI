@@ -520,13 +520,15 @@ function renderWizardAvatarGrid(avatars) {
   const list = avatars && avatars.length ? avatars : [{ avatar_id: 'default', reference_image: null }];
   grid.innerHTML = list.map(a => {
     const id = a.avatar_id;
-    const img = a.reference_image;
-    const imgHtml = img
-      ? `<img src="/api/files?path=${encodeURIComponent(img)}" alt="${id}" onerror="this.parentElement.innerHTML='👤'">`
-      : '👤';
+    const mode = a.meta?.mode || 'mock';
+    const hasLipSync = a.meta?.has_lip_sync || mode === 'wav2lip';
+    const lipBadge = hasLipSync
+      ? '<span style="position:absolute;top:4px;right:4px;background:#10b981;color:#fff;font-size:9px;padding:1px 4px;border-radius:3px">👄 唇形</span>'
+      : '';
+    const imgHtml = `<img src="/api/avatars/${encodeURIComponent(id)}/preview" alt="${id}" onerror="this.parentElement.innerHTML='👤'">`;
     return `
-      <div class="avatar-card" data-id="${id}">
-        <div class="avatar-card-img">${imgHtml}</div>
+      <div class="avatar-card" data-id="${id}" style="position:relative">
+        <div class="avatar-card-img">${imgHtml}${lipBadge}</div>
         <div class="avatar-card-id">${id}</div>
       </div>
     `;
@@ -1632,20 +1634,60 @@ async function deleteJob(jobId) {
 
 // ========== 形象管理页面 ==========
 
+// 上传文件选择时预览
+function onAvatarFileSelected(input) {
+  const file = input.files[0];
+  const textEl = document.getElementById('avatar-upload-text');
+  const previewEl = document.getElementById('avatar-preview');
+  if (!file) {
+    textEl.textContent = '点击或拖拽上传照片/视频';
+    previewEl.style.display = 'none';
+    previewEl.innerHTML = '';
+    return;
+  }
+  textEl.textContent = file.name;
+  previewEl.style.display = 'block';
+  previewEl.innerHTML = '';
+  // 图片直接预览，视频抽帧预览
+  if (file.type.startsWith('image/')) {
+    const url = URL.createObjectURL(file);
+    previewEl.innerHTML = `<img src="${url}" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid #e0e0e0">`;
+  } else if (file.type.startsWith('video/')) {
+    const url = URL.createObjectURL(file);
+    previewEl.innerHTML = `<video src="${url}" controls style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid #e0e0e0"></video>`;
+  }
+}
+
 async function loadAvatars() {
   try {
     const avatars = await api('/api/avatars');
     const grid = document.getElementById('avatars-grid');
     if (!avatars.length) {
-      grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👤</div><div>暂无已注册形象</div></div>';
+      grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👤</div><div>暂无已注册形象</div><div style="font-size:12px;color:#999;margin-top:6px">请上传真人照片/视频注册</div></div>';
       return;
     }
-    grid.innerHTML = avatars.map(a => `
-      <div class="asset-card">
-        <div class="asset-id">${a.avatar_id}</div>
-        <div class="asset-meta">${a.meta?.mode || 'mock'} 模式</div>
-      </div>
-    `).join('');
+    grid.innerHTML = avatars.map(a => {
+      const mode = a.meta?.mode || 'mock';
+      const hasLipSync = a.meta?.has_lip_sync || mode === 'wav2lip';
+      const refType = a.meta?.reference_type || (a.reference_image ? 'photo' : 'unknown');
+      const lipBadge = hasLipSync
+        ? '<span style="color:#10b981;font-size:11px">👄 唇形同步</span>'
+        : '<span style="color:#999;font-size:11px">静态图</span>';
+      const modeBadge = `<span style="color:#6b7280;font-size:11px">${mode}</span>`;
+      // 参考图预览
+      let imgHtml = '<div style="width:100%;height:120px;background:#f5f5f5;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#bbb">无预览</div>';
+      if (a.reference_image || hasLipSync || mode !== 'mock') {
+        imgHtml = `<img src="/api/avatars/${encodeURIComponent(a.avatar_id)}/preview" style="width:100%;height:120px;object-fit:cover;border-radius:6px" onerror="this.outerHTML='<div style=&quot;width:100%;height:120px;background:#f5f5f5;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#bbb&quot;>无预览</div>'">`;
+      }
+      return `
+        <div class="asset-card" style="padding:10px">
+          ${imgHtml}
+          <div class="asset-id" style="margin-top:8px">${a.avatar_id}</div>
+          <div style="display:flex;gap:8px;margin-top:4px">${lipBadge} ${modeBadge}</div>
+          ${refType === 'video' ? '<div style="font-size:11px;color:#6b7280;margin-top:2px">📹 视频参考</div>' : ''}
+        </div>
+      `;
+    }).join('');
   } catch (e) {
     toast(`加载形象失败: ${e.message}`, 'error');
   }
@@ -1655,11 +1697,16 @@ async function handleRegisterAvatar() {
   const avatarId = document.getElementById('avatar-id').value.trim();
   const fileInput = document.getElementById('avatar-file');
   if (!avatarId) { toast('请输入形象 ID', 'error'); return; }
-  if (!fileInput.files.length) { toast('请选择参考视频', 'error'); return; }
+  if (!fileInput.files.length) { toast('请选择参考照片或视频', 'error'); return; }
+
+  const file = fileInput.files[0];
+  const isImage = file.type.startsWith('image/');
+  const isVideo = file.type.startsWith('video/');
+  if (!isImage && !isVideo) { toast('请上传图片或视频文件', 'error'); return; }
 
   const formData = new FormData();
   formData.append('avatar_id', avatarId);
-  formData.append('file', fileInput.files[0]);
+  formData.append('file', file);
 
   const btn = document.getElementById('avatar-reg-btn');
   btn.disabled = true;
@@ -1668,17 +1715,22 @@ async function handleRegisterAvatar() {
   try {
     const resp = await fetch('/api/avatars/register', { method: 'POST', body: formData });
     const result = await resp.json();
-    toast(result.success ? '形象注册成功' : '注册失败', result.success ? 'success' : 'error');
     if (result.success) {
+      toast(`形象注册成功！${isImage ? '照片' : '视频'}已保存，将用于 Wav2Lip 唇形同步`, 'success');
       document.getElementById('avatar-id').value = '';
       fileInput.value = '';
+      document.getElementById('avatar-upload-text').textContent = '点击或拖拽上传照片/视频';
+      document.getElementById('avatar-preview').style.display = 'none';
+      document.getElementById('avatar-preview').innerHTML = '';
       loadAvatars();
+    } else {
+      toast('注册失败', 'error');
     }
   } catch (e) {
     toast(`注册失败: ${e.message}`, 'error');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '📥 注册形象';
+    btn.innerHTML = '📥 注册形象（Wav2Lip 唇形同步）';
   }
 }
 
