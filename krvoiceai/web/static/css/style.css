@@ -83,6 +83,9 @@ body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 
 /* 背景光效 */
@@ -768,6 +771,7 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  pointer-events: none; /* 容器本身不拦截点击，避免覆盖屏幕 */
 }
 
 .toast {
@@ -782,6 +786,7 @@ body::before {
   min-width: 300px;
   animation: slideIn 0.3s ease;
   backdrop-filter: blur(12px);
+  pointer-events: auto; /* 单条 toast 可交互 */
 }
 
 .toast.success { border-left: 3px solid var(--color-success); }
@@ -3334,6 +3339,13 @@ input[type="color"]::-webkit-color-swatch {
    响应式断点：768px（大手机/小平板竖屏）
    ============================================ */
 @media (max-width: 768px) {
+  /* 移动端：改为 body 自然滚动，避免 overflow 容器拦截触摸事件 */
+  html, body {
+    height: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
   /* 显示移动端组件 */
   .mobile-topbar { display: flex; }
   .bottom-nav { display: flex; }
@@ -3346,29 +3358,39 @@ input[type="color"]::-webkit-color-swatch {
     bottom: 0;
     width: 280px;
     transform: translateX(-100%);
+    visibility: hidden;
     z-index: 200;
     box-shadow: var(--shadow-lg);
-    transition: transform var(--transition-base);
+    transition: transform var(--transition-base), visibility var(--transition-base);
+    pointer-events: none;
   }
   .sidebar.open {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
   /* 恢复侧边栏文字显示（抽屉模式下完整显示） */
   .logo-text, .nav-label, .nav-item span:not(.nav-icon), .status-indicator span {
     display: inline;
   }
 
-  /* 主内容区适配 */
+  /* 主内容区适配 — 移动端不使用 overflow 容器，改为 body 自然滚动 */
   .app-layout {
     flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
   }
   .main-content {
-    flex: 1;
+    flex: none; /* 不用 flex:1，让内容自然撑开 */
     padding: 76px 16px 80px;
     padding-top: calc(76px + env(safe-area-inset-top));
     padding-bottom: calc(80px + env(safe-area-inset-bottom));
     width: 100%;
-    overflow-y: auto;
+    overflow: visible; /* 关键：不使用 overflow:auto/scroll，避免移动端触摸拦截 */
+    position: relative;
+    z-index: 1;
+    touch-action: manipulation;
   }
 
   /* 页面标题缩小 */
@@ -3740,6 +3762,43 @@ input[type="color"]::-webkit-color-swatch {
   .btn-icon {
     min-width: 44px;
     min-height: 44px;
+  }
+  /* 确保所有可交互元素可点击 */
+  .btn,
+  .nav-item,
+  .bottom-nav-item,
+  .scene-card,
+  .template-card,
+  .avatar-card,
+  .voice-card,
+  .preset-avatar-card,
+  .preset-voice-card,
+  .scene-template-card,
+  .menu-toggle,
+  .mobile-quick-create,
+  .voice-preview-btn,
+  .modal-close,
+  .progress-modal-close,
+  .upload-zone,
+  .wizard-step,
+  .sub-tab,
+  .action-btn,
+  .asset-card,
+  .recent-card,
+  [onclick],
+  button,
+  a,
+  input[type="button"],
+  input[type="submit"],
+  select,
+  label {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(99, 102, 241, 0.2);
+    pointer-events: auto;
+  }
+  /* 确保遮罩层不阻挡内容（仅 active 时才拦截） */
+  .sidebar-overlay:not(.active) {
+    pointer-events: none;
   }
 }
 

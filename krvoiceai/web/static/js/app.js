@@ -87,9 +87,10 @@ function navigate(page) {
   // 移动端：导航后自动关闭侧边栏抽屉
   closeSidebarDrawer();
 
-  // 滚动到顶部
+  // 滚动到顶部（移动端 body 滚动 / 桌面端 main-content 滚动）
   const mainContent = document.querySelector('.main-content');
   if (mainContent) mainContent.scrollTop = 0;
+  window.scrollTo(0, 0);
 
   // 页面加载时刷新数据
   if (page === 'dashboard') loadDashboard();

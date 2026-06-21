@@ -4,8 +4,75 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
   <title>KrVoiceAI · 虚拟人口播智能体</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260621a">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+  <!-- 移动端点击修复（内联确保优先级，避免外部CSS缓存导致失效） -->
+  <style>
+    @media (max-width: 768px) {
+      html, body {
+        height: auto !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        touch-action: manipulation !important;
+      }
+      /* 彻底放弃 flex 布局，改用最简单的块级布局 */
+      .app-layout {
+        display: block !important;
+        min-height: 100vh !important;
+        min-height: 100dvh !important;
+        height: auto !important;
+        overflow: visible !important;
+        position: static !important;
+        z-index: auto !important;
+      }
+      .main-content {
+        display: block !important;
+        flex: none !important;
+        overflow: visible !important;
+        min-height: 0 !important;
+        touch-action: manipulation !important;
+        position: static !important;
+        z-index: auto !important;
+        padding: 76px 16px 80px !important;
+        padding-top: calc(76px + env(safe-area-inset-top)) !important;
+        padding-bottom: calc(80px + env(safe-area-inset-bottom)) !important;
+      }
+      .sidebar:not(.open) {
+        visibility: hidden !important;
+        pointer-events: none !important;
+        transform: translateX(-100%) !important;
+      }
+      .sidebar-overlay:not(.active) {
+        display: none !important;
+        pointer-events: none !important;
+      }
+      /* 移除所有动画，避免 transform 创建 stacking context 影响触摸 */
+      .page { animation: none !important; }
+      .dashboard-hero { animation: none !important; }
+      .hero-orb { animation: none !important; }
+      .hero-icon-big { animation: none !important; }
+      /* 确保 hero 区不创建影响触摸的层叠上下文 */
+      .dashboard-hero {
+        overflow: visible !important;
+        backdrop-filter: none !important;
+      }
+      .dashboard-hero::before {
+        display: none !important;
+      }
+      /* 确保所有交互元素可点击 */
+      .btn, .nav-item, .bottom-nav-item, .scene-card, .template-card,
+      .avatar-card, .voice-card, .preset-avatar-card, .preset-voice-card,
+      .scene-template-card, .menu-toggle, .mobile-quick-create,
+      .upload-zone, .wizard-step, .sub-tab, .action-btn, .asset-card,
+      .recent-card, button, a, input[type="button"], input[type="submit"],
+      select, label, [onclick] {
+        pointer-events: auto !important;
+        touch-action: manipulation !important;
+        position: relative !important;
+        z-index: 1 !important;
+      }
+    }
+  </style>
 </head>
 <body>
   <div class="app-layout">
@@ -2187,7 +2254,7 @@
   <!-- Toast 容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js"></script>
-  <script src="/static/js/settings.js"></script>
+  <script src="/static/js/app.js?v=20260621a"></script>
+  <script src="/static/js/settings.js?v=20260621a"></script>
 </body>
 </html>

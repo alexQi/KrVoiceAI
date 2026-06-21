@@ -132,7 +132,14 @@ def create_app() -> FastAPI:
     async def index():
         index_file = static_dir / "index.html"
         if index_file.exists():
-            return FileResponse(str(index_file))
+            return FileResponse(
+                str(index_file),
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
         return JSONResponse({"error": "UI 文件未找到"}, status_code=404)
 
     # ============ API 路由 ============
