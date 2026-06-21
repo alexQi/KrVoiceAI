@@ -1237,6 +1237,94 @@ function renderWizardSummary() {
   `;
 }
 
+// ========== 异步任务轮询（实时进度） ==========
+
+let _progressTimerId = null;
+
+async function pollGenerateJob(payload) {
+  // 1. 异步提交任务，立即获得 job_id
+  const submitResp = await api('/api/generate/async', { method: 'POST', body: payload });
+  const jobId = submitResp.job_id;
+  if (!jobId) throw new Error('任务提交失败：未返回 job_id');
+
+  // 2. 启动已用时计时器
+  if (_progressTimerId) clearInterval(_progressTimerId);
+  _progressTimerId = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - _progressStartTime) / 1000);
+    const etaEl = document.getElementById('progress-eta');
+    if (etaEl && !etaEl.textContent.includes('已完成') && !etaEl.textContent.includes('失败')) {
+      etaEl.textContent = `已用时 ${elapsed} 秒 · 正在生成...`;
+    }
+  }, 1000);
+
+  // 3. 轮询任务状态
+  const wizPipeline = document.getElementById('wiz-pipeline');
+  const maxWait = 600000; // 最长等待 10 分钟
+  const pollInterval = 1500;
+  const t0 = Date.now();
+
+  while (true) {
+    if (Date.now() - t0 > maxWait) {
+      throw new Error('生成超时（超过 10 分钟），请稍后重试或减少文案长度');
+    }
+    await new Promise(r => setTimeout(r, pollInterval));
+
+    let job;
+    try {
+      job = await api(`/api/jobs/${jobId}`);
+    } catch (e) {
+      // 轮询失败不中断，继续重试
+      continue;
+    }
+
+    // 构建 stepsState
+    const stepsState = {};
+    let runningStep = null;
+    if (job.steps && Array.isArray(job.steps)) {
+      for (const s of job.steps) {
+        stepsState[s.step] = s.status;
+        if (s.status === 'running') runningStep = s.step;
+      }
+    }
+
+    // 更新向导页内 pipeline
+    if (wizPipeline) {
+      wizPipeline.innerHTML = STEP_ORDER.map(step => {
+        const info = STEP_INFO[step];
+        const status = stepsState[step] || 'pending';
+        const icons = { pending: '○', running: '⟳', success: '✓', failed: '✕', skipped: '−' };
+        const statusText = { pending: '等待中', running: '执行中...', success: '已完成', failed: '失败', skipped: '已跳过' };
+        return `<div class="pipeline-step ${status}"><div class="step-icon">${icons[status] || '○'}</div><div class="step-info"><div class="step-name">${info.icon} ${info.name}</div><div class="step-status">${statusText[status] || status}</div></div></div>`;
+      }).join('');
+    }
+
+    // 更新模态框进度
+    updateProgressModal(stepsState, job);
+
+    // 检查是否完成
+    if (job.status === 'success' || job.status === 'failed') {
+      if (_progressTimerId) { clearInterval(_progressTimerId); _progressTimerId = null; }
+      const output = job.output || {};
+      const result = {
+        success: job.status === 'success',
+        status: job.status,
+        job_id: jobId,
+        error: job.error,
+        output,
+        video_path: output.final_video,
+        title: output.title,
+        script_text: output.script_text,
+        stages: job.steps,
+        steps: stepsState,
+      };
+      if (job.status === 'failed') {
+        throw new Error(job.error || '生成失败，请检查配置后重试');
+      }
+      return result;
+    }
+  }
+}
+
 async function wizardGenerate() {
   const script = document.getElementById('wiz-script').value.trim();
   const refUrl = document.getElementById('wiz-ref-url').value.trim();
@@ -1273,40 +1361,17 @@ async function wizardGenerate() {
       api('/api/settings/effects', { method: 'PUT', body: { section: 'effects', data: collectWizardEffects() } }).catch(() => {}),
     ]);
 
-    const result = await api('/api/generate', {
-      method: 'POST',
-      body: {
-        script, reference_video_url: refUrl || null,
-        avatar_id: avatar, voice_id: voice,
-        script_mode: 'polish', platform, auto_publish: autoPublish,
-      },
+    const result = await pollGenerateJob({
+      script, reference_video_url: refUrl || null,
+      avatar_id: avatar, voice_id: voice,
+      script_mode: 'polish', platform, auto_publish: autoPublish,
     });
-
-    // 更新进度
-    const stepsState = {};
-    if (result.steps) {
-      for (const [name, info] of Object.entries(result.steps)) {
-        stepsState[name] = info.status;
-      }
-    }
-    if (wizPipeline) {
-      wizPipeline.innerHTML = STEP_ORDER.map(step => {
-        const info = STEP_INFO[step];
-        const status = stepsState[step] || 'pending';
-        const icons = { pending: '○', running: '⟳', success: '✓', failed: '✕', skipped: '−' };
-        const statusText = { pending: '等待中', running: '执行中...', success: '已完成', failed: '失败', skipped: '已跳过' };
-        return `<div class="pipeline-step ${status}"><div class="step-icon">${icons[status] || '○'}</div><div class="step-info"><div class="step-name">${info.icon} ${info.name}</div><div class="step-status">${statusText[status] || status}</div></div></div>`;
-      }).join('');
-    }
-
-    // 更新模态框进度
-    updateProgressModal(stepsState, result);
 
     // 展示结果（向导页内）
     const output = result.output || {};
-    const videoPath = output.final_video;
-    const title = output.title || '';
-    const scriptText = output.script_text || '';
+    const videoPath = output.final_video || result.video_path;
+    const title = output.title || result.title || '';
+    const scriptText = output.script_text || result.script_text || '';
     const videoEl = document.getElementById('wiz-result-video');
     if (videoPath) {
       videoEl.innerHTML = `<video src="/api/files?path=${encodeURIComponent(videoPath)}" controls autoplay></video>`;
@@ -1396,8 +1461,9 @@ function updateProgressModal(stepsState, result) {
     document.getElementById('progress-eta').textContent = `已完成 · 用时 ${elapsed.toFixed(1)} 秒`;
   }
   // 完成或失败时显示结果
-  if (result && (result.success || failed > 0 || completed >= STEP_ORDER.length)) {
-    finishProgressModal(result, failed > 0);
+  const isDone = result && (result.success || result.status === 'success' || result.status === 'failed' || failed > 0 || completed >= STEP_ORDER.length);
+  if (isDone) {
+    finishProgressModal(result, failed > 0 || result.status === 'failed');
   }
 }
 

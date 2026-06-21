@@ -170,6 +170,28 @@ def create_app() -> FastAPI:
         )
         return result
 
+    @app.post("/api/generate/async")
+    async def generate_async(req: GenerateRequest):
+        """异步提交视频生成任务，立即返回 job_id，前端轮询 /api/jobs/{job_id} 获取进度"""
+        krvoice = _get_app()
+        # 提交任务（仅创建，不阻塞）
+        job_id = krvoice.orchestrator.submit_job(
+            script=req.script,
+            reference_video_url=req.reference_video_url,
+            avatar_id=req.avatar_id,
+            voice_id=req.voice_id,
+            script_mode=req.script_mode,
+            metadata={"platform": req.platform, "auto_publish": req.auto_publish},
+            broll_clips=req.broll_clips,
+        )
+        # 在后台线程中运行任务（不等待完成）
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None,
+            lambda: krvoice.orchestrator.run_job(job_id),
+        )
+        return {"job_id": job_id, "status": "pending"}
+
     @app.post("/api/module/run")
     async def run_module(req: ModuleRunRequest):
         """单模块执行"""

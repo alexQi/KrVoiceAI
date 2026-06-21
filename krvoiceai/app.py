@@ -420,6 +420,9 @@ class KrVoiceAI:
                 extractor = self.modules.get("script_extract")
                 if not extractor:
                     return {"success": False, "error": "文案提取模块未初始化"}
+                # 确保 setup() 已执行（检测 yt-dlp / ASR 配置）
+                if extractor._ytdlp_available is None:
+                    extractor.setup()
                 text = extractor.extract(reference_url)
                 # 判断是否为 mock：文章提取是真实的，视频提取在 mock 模式下才返回模板文案
                 clean_url = extractor._extract_url_from_text(reference_url)
