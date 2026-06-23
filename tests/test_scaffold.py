@@ -15,7 +15,9 @@ def test_config_load_default():
     cfg = Config.load()
     assert cfg.get("project.name") == "KrVoiceAI"
     assert cfg.get("llm.provider") == "deepseek"
-    assert cfg.get("avatar.provider") == "musetalk"
+    # 默认 avatar provider 为 wav2lip（本地 CPU 友好），
+    # 切云端高质量模式时改为 latentsync/musetalk
+    assert cfg.get("avatar.provider") == "wav2lip"
 
 
 def test_config_env_override(monkeypatch):
@@ -78,7 +80,8 @@ def test_base_module_execute_success(tmp_path):
     assert result.success is True
     assert result.data["output"] == "hello"
     assert m.status == ModuleStatus.SUCCESS
-    assert result.duration > 0
+    # duration 非负即可（极快模块可能为 0.0）
+    assert result.duration >= 0
 
 
 def test_base_module_execute_failure(tmp_path):

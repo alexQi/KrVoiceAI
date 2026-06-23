@@ -12,9 +12,10 @@
 #   2. Python 3.10 + venv
 #   3. PyTorch (CUDA 12.1)
 #   4. GPT-SoVITS（TTS 声音克隆）
-#   5. MuseTalk（数字人口型同步）
-#   6. FunASR（ASR，可选）
-#   7. KrVoiceAI API 服务
+#   5. LatentSync 1.5（数字人口型同步，推荐，质量最高）
+#   6. MuseTalk（数字人口型同步，备选，实时性强）
+#   7. FunASR（ASR，可选）
+#   8. KrVoiceAI API 服务
 
 set -euo pipefail
 
@@ -31,7 +32,7 @@ err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 # 工作目录
 WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/krvoiceai}"
 VENV_DIR="${VENV_DIR:-$WORKSPACE_DIR/.venv}"
-MODELS_DIR="${MODELS_DIR:-$WORKSPACE_DATA/models}"
+MODELS_DIR="${MODELS_DIR:-$WORKSPACE_DIR/workspace_data/models}"
 
 # 检查 GPU
 if ! command -v nvidia-smi &> /dev/null; then
@@ -105,9 +106,21 @@ else
     log "GPT-SoVITS 已存在，跳过克隆"
 fi
 
-# 7. 安装 MuseTalk
+# 7. 安装 LatentSync 1.5（推荐，质量最高的唇同步）
+if [ ! -d "$WORKSPACE_DIR/LatentSync" ]; then
+    log "克隆 LatentSync 1.5（字节跳动，潜在扩散唇同步）..."
+    cd "$WORKSPACE_DIR"
+    git clone https://github.com/bytedance/LatentSync.git
+    cd LatentSync
+    pip install -r requirements.txt
+    pip install -e .
+else
+    log "LatentSync 已存在，跳过克隆"
+fi
+
+# 8. 安装 MuseTalk（备选，实时性强）
 if [ ! -d "$WORKSPACE_DIR/MuseTalk" ]; then
-    log "克隆 MuseTalk..."
+    log "克隆 MuseTalk（备选后端，实时唇同步）..."
     cd "$WORKSPACE_DIR"
     git clone https://github.com/TMElyralab/MuseTalk.git
     cd MuseTalk
@@ -116,11 +129,11 @@ else
     log "MuseTalk 已存在，跳过克隆"
 fi
 
-# 8. 安装 FunASR（可选，用于云端 ASR）
+# 9. 安装 FunASR（可选，用于云端 ASR）
 log "安装 FunASR..."
 pip install funasr==1.0.27 modelscope==1.11.0
 
-# 9. 下载预训练模型
+# 10. 下载预训练模型
 log "下载预训练模型..."
 if [ -f "$WORKSPACE_DIR/scripts/download_models.sh" ]; then
     bash "$WORKSPACE_DIR/scripts/download_models.sh"
@@ -128,7 +141,7 @@ else
     warn "未找到 download_models.sh，跳过模型下载"
 fi
 
-# 10. 配置环境变量
+# 11. 配置环境变量
 log "生成环境配置..."
 cat > "$WORKSPACE_DIR/.env.cloud" <<EOF
 # 云端 GPU 环境变量
@@ -136,6 +149,8 @@ VOICES_DIR=$WORKSPACE_DIR/config/voices
 AVATARS_DIR=$WORKSPACE_DIR/config/avatars
 MODELS_DIR=$MODELS_DIR
 PYTHONPATH=$WORKSPACE_DIR
+# 数字人后端：latentsync（推荐）/ musetalk（备选）
+AVATAR_BACKEND=latentsync
 EOF
 
 log "安装完成！"
@@ -145,6 +160,8 @@ echo " 下一步："
 echo " 1. cd $WORKSPACE_DIR"
 echo " 2. source .venv/bin/activate"
 echo " 3. 启动 TTS 服务: python -m krvoiceai.api.tts_server --port 9880"
-echo " 4. 启动数字人服务: python -m krvoiceai.api.avatar_server --port 8010"
+echo " 4. 启动数字人服务（默认 LatentSync）: python -m krvoiceai.api.avatar_server --port 8010 --backend latentsync"
+echo "    备选 MuseTalk: python -m krvoiceai.api.avatar_server --port 8010 --backend musetalk"
 echo " 5. 本地 KrVoiceAI 配置 gpu_runner.tts_endpoint 和 avatar_endpoint 指向本机"
+echo " 6. 本地切换高质量模式：config 中 avatar.provider 改为 latentsync"
 echo "=========================================="

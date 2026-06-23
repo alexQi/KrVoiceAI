@@ -53,6 +53,16 @@ gpu = [
 tts = [
     "edge-tts>=6.1",  # CPU 降级方案
 ]
+# 本地增强层（纯 CPU 友好，MX450 2GB 显存可跑）
+local = [
+    "faster-whisper>=1.0",  # 词级时间戳字幕精对齐（CPU int8，约 500MB）
+    "jieba>=0.42",  # 文案查重 SimHash 中文分词
+]
+# 云端 GPU 服务依赖（在云 GPU 机器上安装，本地无需）
+cloud = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
 
 [project.scripts]
 krvoiceai = "krvoiceai.ui.cli:main"

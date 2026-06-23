@@ -133,6 +133,8 @@ class VideoComposer(BaseModule):
                 bgm=bgm,
                 cover=ctx.cover_path,
                 output=output_path,
+                subtitle_segments=ctx.metadata.get("subtitle_segments"),
+                voice_audio=ctx.audio_path,  # TTS 真实人声（替换视频静音轨）
             )
             ctx.final_video = final
 
@@ -160,6 +162,8 @@ class VideoComposer(BaseModule):
         bgm: Optional[Path] = None,
         cover: Optional[Path] = None,
         output: Optional[Path] = None,
+        subtitle_segments: Optional[list[dict]] = None,
+        voice_audio: Optional[Path] = None,
     ) -> Path:
         """核心合成方法
 
@@ -169,6 +173,10 @@ class VideoComposer(BaseModule):
             bgm: BGM 音频文件（可选）
             cover: 封面图（可选，作为首帧）
             output: 输出路径
+            subtitle_segments: 带词级时间戳的字幕段（优先于 SRT，
+                让 karaoke 逐字高亮按真实发音时长分配）
+            voice_audio: TTS 真实人声音频（替换视频自带音频）。
+                数字人视频可能含静音轨，必须用此参数传入真实人声。
         """
         video = Path(video)
         output = Path(output) if output else video.parent / "final_video.mp4"
@@ -209,19 +217,33 @@ class VideoComposer(BaseModule):
             )
 
         # 构建滤镜链
-        vf_filters = self._build_video_filters(subtitle, output.parent)
+        vf_filters = self._build_video_filters(
+            subtitle, output.parent, subtitle_segments=subtitle_segments,
+        )
 
         # 构建输入与音频处理
+        # 关键：数字人视频可能含静音轨，必须用 voice_audio（TTS）作为人声源
         inputs = ["-i", str(main_video)]
         audio_filter = None
+        voice_input_idx = 0  # 默认用主视频的音频
+
+        # 如果有 TTS 真实人声，作为额外输入（index 从 1 开始递增）
+        if voice_audio and Path(voice_audio).exists():
+            inputs += ["-i", str(voice_audio)]
+            voice_input_idx = len(inputs) // 2 - 1  # 刚加的输入索引
+
         if bgm and Path(bgm).exists():
             inputs += ["-i", str(bgm)]
-            # 人声 + BGM 混音
+            bgm_input_idx = len(inputs) // 2 - 1
+            # 人声(TTS) + BGM 混音
             audio_filter = (
-                f"[0:a]volume=1.0[voice];"
-                f"[1:a]volume={self.bgm_volume}[bgm];"
+                f"[{voice_input_idx}:a]volume=1.0[voice];"
+                f"[{bgm_input_idx}:a]volume={self.bgm_volume}[bgm];"
                 f"[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
             )
+        elif voice_audio and Path(voice_audio).exists():
+            # 只有人声，无 BGM
+            audio_filter = f"[{voice_input_idx}:a]volume=1.0[aout]"
 
         # 构建命令
         args = list(inputs)
@@ -253,11 +275,16 @@ class VideoComposer(BaseModule):
         self.logger.info(f"视频合成完成: {output}")
         return output
 
-    def _build_video_filters(self, subtitle: Optional[Path], work_dir: Optional[Path] = None) -> str:
+    def _build_video_filters(
+        self, subtitle: Optional[Path], work_dir: Optional[Path] = None,
+        subtitle_segments: Optional[list[dict]] = None,
+    ) -> str:
         """构建视频滤镜链（含分辨率统一、滤镜、字幕、水印）
 
         字幕使用 ASS 格式（通过 subtitle_styler 生成），支持样式预设/动画/逐字高亮。
-        若传入 SRT 文件，会自动转为 ASS。
+        - 若传入 subtitle_segments（含 whisper 词级时间戳），直接用它生成 ASS，
+          karaoke 逐字高亮按真实发音时长分配（最优精度）
+        - 否则从 SRT 文件转换
         """
         filters: list[str] = []
         # 统一分辨率
@@ -275,7 +302,9 @@ class VideoComposer(BaseModule):
 
         # 字幕烧录（ASS 格式，支持样式预设/动画/逐字高亮）
         if subtitle and Path(subtitle).exists():
-            ass_path = self._ensure_ass_subtitle(subtitle, work_dir)
+            ass_path = self._ensure_ass_subtitle(
+                subtitle, work_dir, segments=subtitle_segments,
+            )
             if ass_path:
                 # 转义路径中的特殊字符
                 sub_path = str(ass_path.absolute()).replace("\\", "/").replace(":", r"\:")
@@ -289,8 +318,15 @@ class VideoComposer(BaseModule):
 
         return ",".join(filters)
 
-    def _ensure_ass_subtitle(self, subtitle: Path, work_dir: Optional[Path] = None) -> Optional[Path]:
-        """确保字幕为 ASS 格式（SRT 自动转换，应用样式预设/动画/逐字高亮）"""
+    def _ensure_ass_subtitle(
+        self, subtitle: Path, work_dir: Optional[Path] = None,
+        segments: Optional[list[dict]] = None,
+    ) -> Optional[Path]:
+        """确保字幕为 ASS 格式（应用样式预设/动画/逐字高亮）
+
+        优先用 segments（含 whisper 词级时间戳）直接生成 ASS，
+        让 karaoke 逐字高亮按真实发音时长分配；否则从 SRT 转换。
+        """
         subtitle = Path(subtitle)
         if work_dir is None:
             work_dir = subtitle.parent
@@ -301,9 +337,39 @@ class VideoComposer(BaseModule):
         if subtitle.suffix.lower() == ".ass":
             return subtitle
 
-        # SRT 转 ASS，应用样式
         ass_path = work_dir / (subtitle.stem + ".ass")
         try:
+            # 优先：用词级 segments 生成 ASS（逐字高亮最精准）
+            if segments:
+                from .subtitle_styler import write_ass_file
+                write_ass_file(
+                    segments, ass_path,
+                    preset=self.subtitle_preset,
+                    animation=self.subtitle_animation,
+                    font_size=self.subtitle_font_size,
+                    font_name=self.subtitle_font_name,
+                    position=self.subtitle_position,
+                    alignment=self.subtitle_alignment,
+                    margin_v=self.subtitle_margin_v,
+                    karaoke=self.subtitle_karaoke,
+                    bold=self.subtitle_bold,
+                    italic=self.subtitle_italic,
+                    outline_width=self.subtitle_outline_width,
+                    shadow_distance=self.subtitle_shadow_distance,
+                    letter_spacing=self.subtitle_letter_spacing,
+                    line_spacing=self.subtitle_line_spacing,
+                    play_res_x=self.output_resolution[0],
+                    play_res_y=self.output_resolution[1],
+                )
+                word_count = sum(len(s.get("words", [])) for s in segments)
+                self.logger.info(
+                    f"字幕 segments→ASS（词级时间戳）preset={self.subtitle_preset} "
+                    f"animation={self.subtitle_animation} karaoke={self.subtitle_karaoke} "
+                    f"word_timestamps={word_count}"
+                )
+                return ass_path
+
+            # 退回：SRT 转 ASS
             srt_to_ass(
                 subtitle, ass_path,
                 preset=self.subtitle_preset,
@@ -632,8 +698,29 @@ class VideoComposer(BaseModule):
                 return None
 
     def _find_chinese_font(self) -> Optional[str]:
-        """查找系统中可用的中文字体"""
+        """查找系统中可用的中文字体（跨平台，返回字体文件路径）"""
         import os
+        import platform
+        # Windows
+        if platform.system() == "Windows":
+            win_fonts = [
+                "C:/Windows/Fonts/msyhbd.ttc",   # 微软雅黑粗体
+                "C:/Windows/Fonts/msyh.ttc",     # 微软雅黑
+                "C:/Windows/Fonts/simhei.ttf",   # 黑体
+            ]
+            for p in win_fonts:
+                if os.path.exists(p):
+                    return p
+        # macOS
+        if platform.system() == "Darwin":
+            mac_fonts = [
+                "/System/Library/Fonts/PingFang.ttc",
+                "/Library/Fonts/Songti.ttc",
+            ]
+            for p in mac_fonts:
+                if os.path.exists(p):
+                    return p
+        # Linux
         candidates = [
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",

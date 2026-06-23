@@ -53,9 +53,19 @@ class ScriptExtractor(BaseModule):
         self.timeout = self.config.get("asr.timeout", 120)
 
     def setup(self) -> None:
+        # yt-dlp 检测：优先命令行，其次 Python 模块
         self._ytdlp_available = shutil.which("yt-dlp") is not None
         if not self._ytdlp_available:
-            self.logger.warning("yt-dlp 未安装，将使用 mock 模式提取文案")
+            try:
+                import yt_dlp  # noqa: F401
+                self._ytdlp_available = True
+                self._ytdlp_as_module = True
+            except ImportError:
+                self._ytdlp_as_module = False
+        else:
+            self._ytdlp_as_module = False
+        if not self._ytdlp_available:
+            self.logger.warning("yt-dlp 未安装，视频链接提取将不可用（本地文件提取仍可用）")
         # 检查 ASR provider 是否可用
         if self.asr_provider == "mimo":
             if not self.mimo_api_key or not self.mimo_api_base:
@@ -65,6 +75,13 @@ class ScriptExtractor(BaseModule):
                 self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=mimo/{self.mimo_model}")
         elif self.asr_provider == "funasr":
             self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=funasr")
+        elif self.asr_provider == "whisper_local":
+            # whisper_local 用于本地文件转写（不依赖 yt-dlp）
+            try:
+                import faster_whisper  # noqa: F401
+                self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=whisper_local")
+            except ImportError:
+                self.logger.warning("faster-whisper 未安装，本地文件转写将降级 mock。安装：pip install -e \".[local]\"")
         else:
             self.logger.info(f"文案提取模块初始化 yt-dlp={'可用' if self._ytdlp_available else '不可用'}, ASR=mock")
         super().setup()
@@ -106,23 +123,30 @@ class ScriptExtractor(BaseModule):
             return ModuleResult(success=False, error=str(e))
 
     def extract(self, video_url: str, lang: str = "zh") -> str:
-        """直接调用接口：从视频/文章 URL 提取文案
+        """直接调用接口：从视频/文章 URL 或本地文件提取文案
 
-        支持两类输入：
-        1. 视频链接（抖音/快手/B站/YouTube）：yt-dlp 下载音频 + ASR 转写
-        2. 文章链接（腾讯新闻/微信公众号/新浪新闻等）：requests 抓取网页正文
+        支持三类输入：
+        1. 本地视频/音频文件（路径存在）：FFmpeg 提取音频 + ASR 转写
+        2. 视频链接（抖音/快手/B站/YouTube）：yt-dlp 下载音频 + ASR 转写
+        3. 文章链接（腾讯新闻/微信公众号/新浪新闻等）：requests 抓取网页正文
         """
+        # === 优先检测本地文件 ===
+        cleaned_input = video_url.strip().strip('"').strip("'")
+        local_path = Path(cleaned_input)
+        if local_path.exists() and local_path.is_file():
+            return self._extract_from_local_file(local_path)
+
         # 从分享文本中提取真实 URL（用户可能粘贴整段抖音分享文案）
         video_url = self._extract_url_from_text(video_url)
         if not video_url:
-            raise ValueError("无法从输入中识别有效的视频链接，请粘贴包含抖音/快手/B站/YouTube 链接的内容")
+            raise ValueError("无法从输入中识别有效的视频链接或本地文件，请粘贴包含抖音/快手/B站/YouTube 链接的内容，或提供本地视频文件路径")
 
         # 判断是视频链接还是文章链接
         is_video = self._is_video_url(video_url)
 
         if is_video:
             # 视频链接：yt-dlp + ASR
-            use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo")
+            use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo", "whisper_local")
             if use_real:
                 import tempfile
                 with tempfile.TemporaryDirectory() as tmp:
@@ -146,6 +170,81 @@ class ScriptExtractor(BaseModule):
                 self.logger.warning(f"文章提取失败，降级到 mock: {e}")
                 text = self._extract_mock(video_url)
         return self._clean_text(text)
+
+    def _extract_from_local_file(self, path: Path) -> str:
+        """从本地视频/音频文件提取文案：FFmpeg 提取音频 + ASR 转写"""
+        self.logger.info(f"从本地文件提取文案: {path.name}")
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            # 提取音频为 wav，并做音量归一化（loudnorm）+ 提升低音量
+            # 原因：手机录制视频常出现 mean_volume < -40dB 的极低音量，
+            # whisper 在此条件下无法识别语音。loudnorm 标准化到 -16dB 响度。
+            audio_path = tmp_path / "audio.wav"
+            try:
+                # 先提取原始音频
+                raw_audio = tmp_path / "raw.wav"
+                self.ffmpeg.convert_audio(path, raw_audio, sample_rate=16000, channels=1)
+                # 再做音量归一化（dynaudnorm 自适应增益 + 提升整体音量）
+                import subprocess
+                norm_cmd = [
+                    self.ffmpeg.ffmpeg, "-y", "-i", str(raw_audio),
+                    "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000",
+                    "-ac", "1",
+                    str(audio_path),
+                ]
+                r = subprocess.run(norm_cmd, capture_output=True, text=True)
+                if r.returncode != 0 or not audio_path.exists():
+                    # loudnorm 失败则用原始音频
+                    self.logger.warning(f"loudnorm 失败，用原始音频: {r.stderr[-200:]}")
+                    audio_path = raw_audio
+                else:
+                    self.logger.info("音频已归一化（loudnorm -16dB）")
+            except Exception as e:
+                raise RuntimeError(f"音频提取失败（{path.name}）: {e}")
+
+            # 根据 provider 转写
+            if self.asr_provider == "mimo":
+                return self._clean_text(self._transcribe_mimo(audio_path))
+            elif self.asr_provider == "funasr":
+                try:
+                    return self._clean_text(self._transcribe_funasr(audio_path))
+                except ImportError:
+                    self.logger.warning("FunASR 未安装，降级到 whisper/mock")
+                    return self._clean_text(self._transcribe_local(audio_path))
+            elif self.asr_provider == "whisper_local":
+                return self._clean_text(self._transcribe_local(audio_path))
+            else:
+                self.logger.warning(f"ASR provider={self.asr_provider} 不支持转写，降级 mock")
+                return self._clean_text(self._extract_mock(str(path)))
+
+    def _transcribe_local(self, audio_path: Path) -> str:
+        """使用 faster-whisper 本地转写（CPU int8）
+
+        用于本地文件文案提取；whisper_local provider 不可用时降级 mock。
+        """
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            self.logger.warning("faster-whisper 未安装，文案提取降级 mock")
+            return self._extract_mock(str(audio_path))
+
+        whisper_cfg = self.config.get("asr.whisper", {}) or {}
+        model_size = whisper_cfg.get("model_size", "small")
+        device = whisper_cfg.get("device", "cpu")
+        compute_type = whisper_cfg.get("compute_type", "int8")
+
+        self.logger.info(
+            f"faster-whisper 本地转写: {audio_path.name} model={model_size}"
+        )
+        model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        segments, _ = model.transcribe(
+            str(audio_path), language="zh", vad_filter=True,
+        )
+        text = "".join(seg.text for seg in segments).strip()
+        self.logger.info(f"转写完成: {len(text)} 字, 预览: {text[:80]}")
+        return text
 
     @staticmethod
     def _is_video_url(url: str) -> bool:
@@ -240,35 +339,87 @@ class ScriptExtractor(BaseModule):
         return ""
 
     def _extract_real(self, url: str, work_dir: Path) -> str:
-        """真实提取：yt-dlp 下载 + ASR 转写（支持 MiMo / FunASR）"""
+        """真实提取：yt-dlp 下载 + ASR 转写（支持 MiMo / FunASR / whisper_local）"""
         self.logger.info(f"下载视频音频: {url}")
 
-        # yt-dlp 下载音频
-        cmd = [
-            "yt-dlp",
-            "-x",                       # 仅提取音频
-            "--audio-format", "mp3",
-            "-o", str(work_dir / "ref.%(ext)s"),
-            "--no-playlist",
-            "--no-warnings",
-            url,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            raise RuntimeError(f"yt-dlp 下载失败: {result.stderr[-300:]}")
+        # yt-dlp 下载音频（优先 Python API，其次命令行）
+        output_template = str(work_dir / "ref.%(ext)s")
+        downloaded = self._ytdlp_download_audio(url, output_template)
+        if not downloaded:
+            raise RuntimeError("yt-dlp 下载失败或未找到音频文件")
 
-        # 查找下载的音频文件
-        audio_files = list(work_dir.glob("ref.*"))
-        if not audio_files:
-            raise RuntimeError("下载后未找到音频文件")
-        audio_path = audio_files[0]
+        audio_path = downloaded
         self.logger.info(f"下载完成: {audio_path.name} ({audio_path.stat().st_size // 1024}KB)")
+
+        # 音量归一化（部分平台下载的音频音量偏低）
+        norm_audio = work_dir / "ref_norm.wav"
+        try:
+            import subprocess
+            r = subprocess.run(
+                [self.ffmpeg.ffmpeg, "-y", "-i", str(audio_path),
+                 "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                 "-ar", "16000", "-ac", "1", str(norm_audio)],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0 and norm_audio.exists():
+                audio_path = norm_audio
+        except Exception:
+            pass
 
         # 根据 provider 选择 ASR
         if self.asr_provider == "mimo":
             return self._transcribe_mimo(audio_path)
+        elif self.asr_provider == "whisper_local":
+            return self._transcribe_local(audio_path)
         else:
             return self._transcribe_funasr(audio_path)
+
+    def _ytdlp_download_audio(self, url: str, output_template: str) -> Optional[Path]:
+        """用 yt-dlp 下载音频，返回下载的文件路径
+
+        优先使用 Python API（yt_dlp.YoutubeDL），失败则回退命令行。
+        """
+        # 方式 1：Python API
+        try:
+            import yt_dlp
+            opts = {
+                "format": "bestaudio/best",
+                "outtmpl": output_template,
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                }],
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            # 查找下载结果
+            work_dir = Path(output_template).parent
+            for ext in ("mp3", "m4a", "webm", "opus", "wav"):
+                files = list(work_dir.glob(f"ref.*{ext}"))
+                if files:
+                    return files[0]
+        except Exception as e:
+            self.logger.warning(f"yt-dlp Python API 下载失败: {e}")
+
+        # 方式 2：命令行
+        if shutil.which("yt-dlp"):
+            import subprocess
+            cmd = [
+                "yt-dlp", "-x", "--audio-format", "mp3",
+                "-o", output_template,
+                "--no-playlist", "--no-warnings", url,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                work_dir = Path(output_template).parent
+                files = list(work_dir.glob("ref.*"))
+                if files:
+                    return files[0]
+            self.logger.warning(f"yt-dlp 命令行失败: {result.stderr[-200:]}")
+        return None
 
     def _transcribe_mimo(self, audio_path: Path) -> str:
         """使用 MiMo ASR 转写音频为文本

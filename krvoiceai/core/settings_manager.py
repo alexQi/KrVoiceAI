@@ -496,7 +496,7 @@ class SettingsManager:
         """
         if section not in ("llm", "tts", "avatar", "asr", "composer",
                            "cover", "publisher", "pipeline", "project", "logging",
-                           "subtitle", "scene", "audio", "effects"):
+                           "subtitle", "scene", "audio", "effects", "originality"):
             return {"success": False, "message": f"不允许修改的配置段: {section}", "section": section}
 
         # 处理掩码字段：若值形如 "sk-x****abcd" 视为未修改，保留原值

@@ -292,7 +292,11 @@ class PipelineOrchestrator:
         )
 
     def _load_context(self, ctx: JobContext) -> None:
-        """从持久化文件恢复中间产物"""
+        """从持久化文件恢复中间产物
+
+        带完整性校验：损坏的音视频文件会被忽略（视为该步骤未完成），
+        让 _find_resume_point 从该步骤重跑，避免用坏文件续跑。
+        """
         import json
         ctx_file = ctx.work_dir / "context.json"
         if not ctx_file.exists():
@@ -303,30 +307,36 @@ class PipelineOrchestrator:
                 ctx.script_text = data["script_text"]
             if data.get("audio_path"):
                 p = Path(data["audio_path"])
-                if p.exists():
+                if self._validate_artifact(p, "audio"):
                     ctx.audio_path = p
                     ctx.audio_duration = data.get("audio_duration", 0)
             if data.get("raw_video_path"):
                 p = Path(data["raw_video_path"])
-                if p.exists():
+                if self._validate_artifact(p, "video"):
                     ctx.raw_video_path = p
             if data.get("subtitle_path"):
                 p = Path(data["subtitle_path"])
-                if p.exists():
+                if self._validate_artifact(p, "subtitle"):
                     ctx.subtitle_path = p
             if data.get("bgm_path"):
-                ctx.bgm_path = Path(data["bgm_path"])
+                p = Path(data["bgm_path"])
+                if self._validate_artifact(p, "audio"):
+                    ctx.bgm_path = p
             if data.get("cover_path"):
-                ctx.cover_path = Path(data["cover_path"])
+                p = Path(data["cover_path"])
+                if self._validate_artifact(p, "image"):
+                    ctx.cover_path = p
             if data.get("title"):
                 ctx.title = data["title"]
             if data.get("final_video"):
-                ctx.final_video = Path(data["final_video"])
+                p = Path(data["final_video"])
+                if self._validate_artifact(p, "video"):
+                    ctx.final_video = p
             if data.get("broll_clips"):
                 ctx.broll_clips = data["broll_clips"]
             if data.get("broll_video_path"):
                 p = Path(data["broll_video_path"])
-                if p.exists():
+                if self._validate_artifact(p, "video"):
                     ctx.broll_video_path = p
             # 合并 metadata（保留 tts_timestamps 等）
             saved_meta = data.get("metadata", {})
@@ -336,6 +346,62 @@ class PipelineOrchestrator:
             self.logger.debug(f"已从 context.json 恢复中间产物 job={ctx.job_id}")
         except Exception as e:
             self.logger.warning(f"恢复 context 失败: {e}")
+
+    def _validate_artifact(self, path: Path, kind: str) -> bool:
+        """校验产物文件完整性
+
+        Args:
+            path: 文件路径
+            kind: 类型 audio/video/image/subtitle
+
+        Returns:
+            True 表示文件可用；False 表示损坏/缺失，应重跑该步骤
+        """
+        if not path.exists():
+            return False
+        # 体积过小（<100B）几乎肯定是损坏的空文件
+        try:
+            if path.stat().st_size < 100:
+                self.logger.warning(f"产物文件过小，视为损坏: {path} ({path.stat().st_size}B)")
+                return False
+        except OSError:
+            return False
+
+        if kind == "audio":
+            # wav 用 wave 解析；其他格式用 ffprobe
+            if path.suffix.lower() == ".wav":
+                try:
+                    from ..core.audio_utils import get_wav_duration
+                    return get_wav_duration(path) > 0.1
+                except Exception:
+                    return False
+            return self._probe_media_duration(path) > 0.1
+        elif kind == "video":
+            return self._probe_media_duration(path) > 0.1
+        elif kind == "image":
+            try:
+                from PIL import Image
+                with Image.open(path) as img:
+                    return img.size[0] > 0 and img.size[1] > 0
+            except Exception:
+                return False
+        elif kind == "subtitle":
+            # 字幕：非空且含时间轴标记
+            try:
+                txt = path.read_text(encoding="utf-8")
+                return bool(txt.strip())
+            except Exception:
+                return False
+        return True
+
+    def _probe_media_duration(self, path: Path) -> float:
+        """用 ffprobe 探测音视频时长（无 ffprobe 返回 0 视为不可用）"""
+        try:
+            from ..core.ffmpeg_utils import FFmpegRunner
+            ff = FFmpegRunner()
+            return ff.probe_duration(path)
+        except Exception:
+            return 0.0
 
     def _build_output(self, ctx: JobContext) -> dict:
         """构建任务输出信息"""

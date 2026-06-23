@@ -151,8 +151,33 @@ def _ass_time(seconds: float) -> str:
 
 
 def _find_chinese_font() -> str:
-    """查找系统中可用的中文字体名"""
+    """查找系统中可用的中文字体名（跨平台）"""
     import os
+    import platform
+
+    # Windows 中文字体（系统自带）
+    if platform.system() == "Windows":
+        win_fonts = [
+            ("C:/Windows/Fonts/msyh.ttc", "Microsoft YaHei"),        # 微软雅黑
+            ("C:/Windows/Fonts/msyhbd.ttc", "Microsoft YaHei"),      # 微软雅黑粗体
+            ("C:/Windows/Fonts/simhei.ttf", "SimHei"),               # 黑体
+            ("C:/Windows/Fonts/simsun.ttc", "SimSun"),               # 宋体
+        ]
+        for path, name in win_fonts:
+            if os.path.exists(path):
+                return name
+
+    # macOS 中文字体
+    if platform.system() == "Darwin":
+        mac_fonts = [
+            ("/System/Library/Fonts/PingFang.ttc", "PingFang SC"),
+            ("/Library/Fonts/Songti.ttc", "Songti SC"),
+        ]
+        for path, name in mac_fonts:
+            if os.path.exists(path):
+                return name
+
+    # Linux 中文字体
     # 字体文件路径 -> ASS FontName 映射
     candidates = [
         ("/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc", "Noto Sans CJK SC"),
@@ -251,8 +276,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         text = seg["text"].strip().replace("\n", "\\N")
 
         if karaoke:
-            # 逐字高亮：将文本拆为单字，每个字分配 \kf 时长
-            text = _build_karaoke_text(seg["text"], seg["start"], seg["end"])
+            # 逐字高亮：优先用词级时间戳，否则按字数均分
+            text = _build_karaoke_text(
+                seg["text"], seg["start"], seg["end"],
+                words=seg.get("words"),
+            )
         elif anim_tag:
             # 应用动画标签（替换占位符）
             tag = anim_tag.replace("x,x", f"{play_res_x//2},{play_res_x//2}")
@@ -265,7 +293,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def _build_karaoke_text(text: str, start: float, end: float) -> str:
+def _build_karaoke_text(
+    text: str, start: float, end: float,
+    words: list[dict] | None = None,
+) -> str:
     """构建逐字高亮 ASS 文本
 
     将文本拆为单字，每个字用 \\kf<厘秒> 标签分配时长。
@@ -275,19 +306,52 @@ def _build_karaoke_text(text: str, start: float, end: float) -> str:
         text: 字幕文本
         start: 开始时间（秒）
         end: 结束时间（秒）
+        words: 词级时间戳（可选，来自 faster-whisper）。
+               有词级时间戳时按真实时长分配 \\kf，精度远高于均分。
+               格式: [{"text": "字", "start": 0.0, "end": 0.2}, ...]
 
     Returns:
         带 \\kf 标签的 ASS 文本
     """
+    # ===== 有词级时间戳：按真实时长逐字高亮（最优精度）=====
+    if words:
+        # 把所有词的字符展开，每个字用其所属词的 start/end 区间
+        # （faster-whisper 中文 word 通常已是单字或短词，直接用词时长）
+        parts: list[str] = []
+        for w in words:
+            wt = w.get("text", "").strip()
+            if not wt:
+                continue
+            ws = w.get("start", start)
+            we = w.get("end", end)
+            # 一个词可能是多字，按字数均分该词时长
+            dur_cs = max(1, int(round((we - ws) * 100)))
+            chars = [c for c in wt if c.strip()]
+            if not chars:
+                continue
+            if len(chars) == 1:
+                parts.append(f"{{\\kf{dur_cs}}}{chars[0]}")
+            else:
+                per_cs = max(1, dur_cs // len(chars))
+                for i, ch in enumerate(chars):
+                    if i == len(chars) - 1:
+                        remaining = max(1, dur_cs - per_cs * (len(chars) - 1))
+                        parts.append(f"{{\\kf{remaining}}}{ch}")
+                    else:
+                        parts.append(f"{{\\kf{per_cs}}}{ch}")
+        if parts:
+            return "".join(parts)
+        # 词级时间戳为空，落入下面均分兜底
+
+    # ===== 兜底：无词级时间戳，按字数均分 =====
     chars = [c for c in text.strip() if c.strip()]
     if not chars:
         return text
 
     total_dur_cs = int(round((end - start) * 100))  # 总时长（厘秒）
-    # 按字数均分（简化方案；有词级时间戳时按实际时长分配）
     per_char_cs = max(1, total_dur_cs // len(chars))
 
-    parts: list[str] = []
+    parts = []
     for i, ch in enumerate(chars):
         # 最后一个字取剩余时长，避免 rounding 误差
         if i == len(chars) - 1:

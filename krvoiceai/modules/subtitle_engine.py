@@ -1,11 +1,12 @@
 """字幕生成模块
 
-三种 provider：
+四种 provider：
+- whisper_local: 使用 faster-whisper（CPU int8）识别，提供词级时间戳（本地推荐）
 - mimo:   调用小米 MiMo ASR API（OpenAI 兼容 chat/completions 端点）
 - funasr: 调用 FunASR 服务（本地 HTTP API）进行语音识别 + 时间戳对齐
 - mock:   优先复用 TTS 时间戳，否则按文本长度估算
 
-输出：SRT 格式字幕文件
+输出：SRT 格式字幕文件（segment 可携带 words 词级时间戳，供 ASS 卡拉OK逐字高亮使用）
 """
 from __future__ import annotations
 
@@ -67,9 +68,28 @@ class SubtitleEngine(BaseModule):
         self.mimo_api_key = self.config.get("asr.api_key", "")
         self.mimo_model = self.config.get("asr.mimo_model", "mimo-v2.5-asr")
         self.timeout = self.config.get("asr.timeout", 120)
+        # faster-whisper 本地配置
+        self.whisper_cfg = self.config.get("asr.whisper", {}) or {}
+        self._whisper_available = False
 
     def setup(self) -> None:
-        if self.provider == "mimo":
+        if self.provider == "whisper_local":
+            # 检查 faster-whisper 是否可用
+            try:
+                import faster_whisper  # noqa: F401
+                self._whisper_available = True
+                self.logger.info(
+                    f"faster-whisper 本地可用 model_size={self.whisper_cfg.get('model_size','small')} "
+                    f"device={self.whisper_cfg.get('device','cpu')}"
+                )
+            except ImportError:
+                self._whisper_available = False
+                self.logger.warning(
+                    "faster-whisper 未安装，降级到 mock 模式（词级时间戳不可用）。"
+                    "安装方法：pip install -e \".[local]\""
+                )
+                self.provider = "mock"
+        elif self.provider == "mimo":
             if not self.mimo_api_key or not self.mimo_api_base:
                 self.logger.warning(
                     "MiMo ASR 未配置 api_key/api_base，降级到 mock 模式"
@@ -102,7 +122,9 @@ class SubtitleEngine(BaseModule):
         output_path = ctx.work_dir / "subtitle.srt"
 
         try:
-            if self.provider == "mimo":
+            if self.provider == "whisper_local" and self._whisper_available:
+                segments = self._recognize_whisper(ctx)
+            elif self.provider == "mimo":
                 segments = self._recognize_mimo(ctx)
             elif self.provider == "funasr" and self._funasr_available:
                 segments = self._recognize_funasr(ctx)
@@ -126,6 +148,134 @@ class SubtitleEngine(BaseModule):
             )
         except Exception as e:
             return ModuleResult(success=False, error=str(e))
+
+    def _recognize_whisper(self, ctx: JobContext) -> list[dict]:
+        """使用 faster-whisper 识别音频，提供词级时间戳（本地 CPU int8）
+
+        faster-whisper 优势：
+        - 词级时间戳（word_timestamps=True），驱动 ASS 卡拉OK逐字高亮
+        - CPU int8 量化，MX450 2GB 显存也能跑
+        - 内置 VAD 静音过滤，字幕对齐更精准
+
+        输出 segment 结构（携带 words 字段）：
+            {"text": "...", "start": 0.0, "end": 2.5,
+             "words": [{"text": "字", "start": 0.0, "end": 0.2}, ...]}
+        """
+        from faster_whisper import WhisperModel
+
+        model_size = self.whisper_cfg.get("model_size", "small")
+        device = self.whisper_cfg.get("device", "cpu")
+        compute_type = self.whisper_cfg.get("compute_type", "int8")
+        beam_size = int(self.whisper_cfg.get("beam_size", 5))
+        vad_filter = bool(self.whisper_cfg.get("vad_filter", True))
+        download_root = self.whisper_cfg.get("download_root") or None
+
+        self.logger.info(
+            f"faster-whisper 识别: {ctx.audio_path.name} "
+            f"model={model_size} device={device} compute={compute_type}"
+        )
+
+        model = WhisperModel(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            download_root=download_root,
+        )
+
+        segments_iter, info = model.transcribe(
+            str(ctx.audio_path),
+            language=self.language,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+            word_timestamps=True,
+        )
+
+        segments: list[dict] = []
+        for seg in segments_iter:
+            text = (seg.text or "").strip()
+            if not text:
+                continue
+            words = []
+            for w in (seg.words or []):
+                wt = (w.word or "").strip()
+                if not wt or w.start is None or w.end is None:
+                    continue
+                words.append({
+                    "text": wt,
+                    "start": round(float(w.start), 3),
+                    "end": round(float(w.end), 3),
+                })
+
+            seg_start = round(float(seg.start), 3)
+            seg_end = round(float(seg.end), 3)
+
+            # 长句切分（保留 words，让每个子段仍可驱动逐字高亮）
+            if len(text) > self.max_chars:
+                sub_segs = split_text_to_segments(text, self.max_chars)
+                # 把 words 按时间比例分配到子段
+                sub_segments = self._split_segment_with_words(
+                    sub_segs, seg_start, seg_end, words
+                )
+                segments.extend(sub_segments)
+            else:
+                segments.append({
+                    "text": text, "start": seg_start, "end": seg_end,
+                    "words": words,
+                })
+
+        self.logger.info(
+            f"faster-whisper 识别完成: {len(segments)} 条字幕（均带词级时间戳）"
+        )
+
+        # 兜底：识别为空时降级
+        if not segments:
+            self.logger.warning("faster-whisper 识别为空，降级到 mock")
+            return self._generate_mock(ctx)
+        return segments
+
+    def _split_segment_with_words(
+        self, sub_texts: list[str], start: float, end: float,
+        words: list[dict],
+    ) -> list[dict]:
+        """将一个长句的 words 按子段文本长度比例分配时间，保留逐字精度"""
+        total_dur = end - start
+        if not words:
+            # 无词级时间戳，按字数均分
+            total_chars = sum(len(s) for s in sub_texts) or 1
+            result = []
+            offset = start
+            for s in sub_texts:
+                d = total_dur * len(s) / total_chars
+                result.append({
+                    "text": s, "start": round(offset, 3),
+                    "end": round(offset + d, 3), "words": [],
+                })
+                offset += d
+            return result
+
+        # 有词级时间戳：把 words 按子段字符数大致切分
+        # 简化策略：按每个子段的字数比例从 words 中分配
+        result = []
+        word_idx = 0
+        total_chars = sum(len(s) for s in sub_texts) or 1
+        for s in sub_texts:
+            n_take = max(1, round(len(words) * len(s) / total_chars))
+            chunk = words[word_idx:word_idx + n_take]
+            word_idx += n_take
+            if chunk:
+                cs = chunk[0]["start"]
+                ce = chunk[-1]["end"]
+            else:
+                cs, ce = start, end
+            result.append({
+                "text": s, "start": round(cs, 3),
+                "end": round(ce, 3), "words": chunk,
+            })
+        # 把剩余的 words 并入最后一段
+        if word_idx < len(words) and result:
+            result[-1]["words"].extend(words[word_idx:])
+            result[-1]["end"] = words[-1]["end"]
+        return result
 
     def _recognize_mimo(self, ctx: JobContext) -> list[dict]:
         """使用小米 MiMo ASR 识别音频

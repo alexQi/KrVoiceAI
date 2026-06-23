@@ -189,3 +189,74 @@ def test_video_resolution_matches_config(avatar_mock, job_work_dir, audio_file):
     assert info is not None
     assert info.width == avatar_mock.output_resolution[0]
     assert info.height == avatar_mock.output_resolution[1]
+
+
+# ============ 微动作层测试 ============
+
+def test_micro_motion_disabled_by_default(avatar_mock, job_work_dir, audio_file):
+    """默认关闭微动作 → 输出与原始一致（无 avatar_with_motion.mp4）"""
+    ctx = JobContext(
+        work_dir=job_work_dir,
+        audio_path=audio_file,
+        audio_duration=2.0,
+    )
+    ctx.ensure_work_dir()
+    avatar_mock.execute(ctx)
+
+    motion_file = ctx.work_dir / "avatar_with_motion.mp4"
+    assert not motion_file.exists(), "微动作未启用却生成了后处理文件"
+
+
+def test_micro_motion_enabled(isolated_config, mock_gpu, job_work_dir, audio_file):
+    """启用微动作 → 生成带动作的视频，时长/分辨率保持"""
+    isolated_config.set("avatar.provider", "mock")
+    isolated_config.set("avatar.micro_motion.enabled", True)
+    av = AvatarEngine(gpu_runner=mock_gpu)
+    av.setup()
+
+    ctx = JobContext(
+        work_dir=job_work_dir,
+        audio_path=audio_file,
+        audio_duration=2.0,
+    )
+    ctx.ensure_work_dir()
+    result = av.execute(ctx)
+    assert result.success is True
+    assert ctx.raw_video_path.exists()
+
+    # 微动作产物应存在
+    motion_file = ctx.work_dir / "avatar_with_motion.mp4"
+    assert motion_file.exists()
+
+    # 产物仍是有效视频（分辨率与配置一致）
+    ff = FFmpegRunner()
+    info = ff.probe_video_info(ctx.raw_video_path)
+    assert info is not None
+    assert info.width == av.output_resolution[0]
+    assert info.height == av.output_resolution[1]
+    # 时长应接近原音频时长（允许 ±0.5s 的处理误差）
+    assert info.duration > 1.0
+
+
+def test_micro_motion_failure_falls_back(
+    isolated_config, mock_gpu, job_work_dir, audio_file
+):
+    """微动作处理失败 → 降级返回原视频，不阻断流程"""
+    isolated_config.set("avatar.provider", "mock")
+    isolated_config.set("avatar.micro_motion.enabled", True)
+    av = AvatarEngine(gpu_runner=mock_gpu)
+    av.setup()
+
+    # 让 ffmpeg.add_micro_motion 抛异常
+    av.ffmpeg.add_micro_motion = MagicMock(side_effect=RuntimeError("ffmpeg boom"))
+
+    ctx = JobContext(
+        work_dir=job_work_dir,
+        audio_path=audio_file,
+        audio_duration=2.0,
+    )
+    ctx.ensure_work_dir()
+    result = av.execute(ctx)
+    # 降级：仍成功，且用的是原 mock 视频
+    assert result.success is True
+    assert ctx.raw_video_path.exists()

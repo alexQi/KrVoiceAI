@@ -30,7 +30,7 @@ llm:
 
 # TTS 配置（声音克隆）
 tts:
-  provider: gpt_sovits  # mimo / gpt_sovits / edge_tts / mock
+  provider: moss_nano  # moss_nano / mimo / gpt_sovits / edge_tts / mock
   # GPT-SoVITS 云端服务地址
   api_base: http://localhost:9880
   api_key: ""
@@ -42,6 +42,28 @@ tts:
   # 音色库目录
   voices_dir: ./config/voices
   default_voice: default
+  # MOSS-TTS-Nano 配置（provider=moss_nano 时使用，本地 CPU 声音克隆）
+  moss_nano:
+    # MOSS-TTS-Nano 仓库根目录（含 onnx_tts_runtime.py）
+    repo_dir: ../../MOSS-TTS-Nano
+    # ONNX 模型目录（含 MOSS-TTS-Nano-100M-ONNX 和 MOSS-Audio-Tokenizer-Nano-ONNX）
+    model_dir: ../../MOSS-TTS-Nano/models
+    # CPU 线程数
+    cpu_threads: 4
+    # 执行后端：cpu / cuda
+    execution_provider: cpu
+    # 内置音色（无参考音频时使用）：Junhao / Trump / Ava / Bella / Adam / Nathan
+    builtin_voice: Junhao
+    # 文本归一化是否启用 WeTextProcessing（需 pynini，Windows 难装建议关）
+    enable_wetext: false
+    # 是否启用 robust normalizer
+    enable_normalize_tts_text: true
+    # 长文本分块 token 预算
+    voice_clone_max_text_tokens: 75
+    # 最大生成音频帧数
+    max_new_frames: 375
+    # 实时流式解码（更快）
+    realtime_streaming: true
 
 # 数字人配置（口播生成）
 avatar:
@@ -56,18 +78,58 @@ avatar:
   # 输出视频参数
   output_fps: 25
   output_resolution: [1080, 1920]  # 竖版
-  # Wav2Lip 配置
+  # Wav2Lip 配置（本地 CPU 唇形同步，嘴会动）
   wav2lip:
-    checkpoint_path: ./Wav2Lip/checkpoints/wav2lip.pth
+    # 模型权重（wav2lip_gan.pth 比 wav2lip.pth 画质略好）
+    checkpoint_path: ../Wav2Lip/checkpoints/wav2lip_gan.pth
+    # 独立 Python 环境路径（Wav2Lip 需要 Python 3.8 + torch 1.13）
+    # 由 scripts/setup_wav2lip_env.bat 创建
+    env_python: ../wav2lip_env/Scripts/python.exe
+    # 推理脚本路径（Wav2Lip 仓库的 inference.py）
+    inference_script: ../Wav2Lip/inference.py
     face_det_batch_size: 4
-    wav2lip_batch_size: 8
+    wav2lip_batch_size: 4
     pads: [0, 20, 0, 0]  # 上右下左 padding，包含下巴
-    resize_factor: 1
+    # resize_factor=2 是 CPU 模式速度甜点（1080p→540p 推理，秒级出帧）
+    # 设为 1 用原分辨率（质量最高但 CPU 极慢，1分钟视频可能数小时）
+    resize_factor: 2
     nosmooth: false
+  # 微动作层（FFmpeg 后处理，缓解"只有嘴动"的恐怖谷）
+  # 给静态照片/Wav2Lip 输出加：呼吸缩放 + 微抖动 + 眨眼亮度节奏
+  micro_motion:
+    enabled: false        # 默认关，避免对高质量云端输出过度处理；本地 wav2lip 建议开
+    breathing_scale: 0.02 # 呼吸缩放幅度（1.0 ± 此值，0.02 = 2% 缩放）
+    breathing_period: 4.0 # 呼吸周期（秒）
+    shake_amplitude: 0.3  # 微抖动幅度（度，±0.3° 摆动）
+    shake_period: 2.0     # 抖动周期（秒）
+    blink_enabled: true   # 眨眼（用周期性亮度脉冲近似闭眼节奏）
+    blink_interval: 4.0   # 眨眼间隔（秒）
+  # GFPGAN 人脸增强（提升 Wav2Lip 脸部清晰度）
+  # 注意：CPU 模式较慢（逐帧约9秒），stride 跳帧会导致动作卡顿。
+  # 建议：追求流畅用 enabled:false；追求清晰度且能接受长时间处理用 enabled:true + stride:1
+  gfpgan:
+    enabled: false               # 默认关（保证动作流畅）；开启需 stride=1 逐帧处理
+    model_path: ../Wav2Lip/gfpgan_weights/GFPGANv1.4.pth
+    enhance_script: ../wav2lip_env/enhance.py
+    weight: 0.5                  # 增强权重（0-1）
+    device: cpu
+    stride: 1                    # 1=逐帧（流畅但慢），>1=跳帧（快但卡顿）
+  # LatentSync 1.5 配置（云端 GPU，provider=latentsync 时使用）
+  # 字节跳动开源，潜在扩散模型，口型质量超过 MuseTalk，适合高质量口播/无人直播
+  latentsync:
+    config: high_quality  # high_quality / fast（质量/速度权衡）
+    inference_steps: 25   # 扩散步数（25 平衡，50 最高质量，10 最快）
+    resolution: 512       # 处理分辨率（512 推荐，256 更快）
+    seed: -1              # 随机种子（-1 随机）
 
 # ASR 配置（字幕/文案提取）
 asr:
-  provider: funasr  # mimo / funasr / whisper / mock
+  # provider 优先级（本地优先）：
+  #   whisper_local: faster-whisper CPU int8，词级时间戳，本地推荐（需 pip install -e ".[local]"）
+  #   funasr:        FunASR 服务（本地或云端，需 GPU）
+  #   mimo:          小米 MiMo ASR API（云端）
+  #   mock:          降级（复用 TTS 时间戳或按字数估算）
+  provider: whisper_local
   model: paraformer-zh
   # 本地运行时模型缓存目录
   model_cache: ./workspace_data/models/asr
@@ -77,6 +139,14 @@ asr:
   api_key: ""
   mimo_model: mimo-v2.5-asr
   timeout: 120
+  # faster-whisper 本地配置（provider=whisper_local 时使用）
+  whisper:
+    model_size: small       # tiny/base/small/medium/large-v3（small 平衡质量与速度）
+    device: cpu             # MX450 2GB 用 cpu；有 6GB+ GPU 可改 cuda
+    compute_type: int8      # CPU 用 int8（最快）；GPU 用 float16
+    beam_size: 5            # 解码 beam 宽度，越大越准越慢
+    vad_filter: true        # 启用 VAD 静音过滤，提升字幕对齐精度
+    download_root: ""       # 模型下载根目录（空则用 ~/AppData/Local/cache 或 HuggingFace 默认）
   # 字幕基础样式
   subtitle:
     font_size: 24
@@ -87,14 +157,14 @@ asr:
 
 # 字幕高级样式与效果（对标剪映/Sayatoo/腾讯智影）
 subtitle:
-  # 样式预设：minimal_white / tech_blue / classic_gold / pop_pink / news_red / dark_black
-  preset: minimal_white
+  # 样式预设：douyin_hot(抖音爆款黄字) / minimal_white / tech_blue / classic_gold / pop_pink / news_red
+  preset: douyin_hot
   # 入场动画：none / fade / slide / zoom / bounce / typewriter / karaoke
   animation: fade
   # 字体名称（系统字体）
   font_name: "Source Han Sans CN"
-  # 字号
-  font_size: 28
+  # 字号（1080x1920 下 36 较醒目）
+  font_size: 36
   # 主色（ASS 格式 &HBBGGRR）
   primary_color: "&H00FFFFFF"
   # 描边色
@@ -113,12 +183,12 @@ subtitle:
   position: bottom
   # 水平对齐：left / center / right
   alignment: center
-  # 垂直边距（像素）
-  margin_v: 80
+  # 垂直边距（像素，120 避开手机底部手势区）
+  margin_v: 120
   # 双行字幕（长句自动折行）
   dual_line: true
-  # 卡拉OK逐字点亮
-  karaoke: false
+  # 卡拉OK逐字点亮（开启后配合 whisper 词级时间戳，逐字高亮按真实发音时长）
+  karaoke: true
   # 加粗
   bold: true
   # 斜体
@@ -167,8 +237,8 @@ audio:
     enabled: true
     # BGM 曲目（从 bgm_library 选择）
     track: "soft_piano"
-    # BGM 音量（0-100，建议 10-20）
-    volume: 15
+    # BGM 音量（0-100，建议 10-15，口播人声为主）
+    volume: 12
     # 淡入时长（秒）
     fade_in: 1.0
     # 淡出时长（秒）
@@ -179,8 +249,7 @@ effects:
   # 转场效果：none / fade / slide / zoom / swipe
   transition: fade
   # 转场时长（秒）
-  transition_duration: 0.5
-  # 滤镜：none / warm / cool / bw / vintage / vivid
+  transition_duration: 0.5  # 滤镜：none / warm / cool / bw / vintage / vivid
   filter: none
   # 滤镜强度（0-100）
   filter_intensity: 50
@@ -306,11 +375,14 @@ composer:
 # 封面生成配置
 cover:
   mode: frame_overlay  # frame_overlay / sdxl / template
+  # 布局：bottom(人物上2/3+标题下1/3，口播标准) / center / top / full
+  layout: bottom
   # 模板目录
   templates_dir: ./config/cover_templates
-  # 字体
-  font_path: ./config/fonts/SourceHanSansCN-Bold.otf
-  title_max_chars: 20
+  # 字体（空则用系统粗体中文）
+  font_path: ""
+  # 标题最大字数
+  title_max_chars: 18
 
 # 发布配置
 publisher:
@@ -333,6 +405,23 @@ publisher:
       method: playwright
   # 发布间隔（秒），避免频率限制
   publish_interval: 60
+
+# 文案原创度与风控配置（script_write 之后检测）
+originality:
+  # 是否启用（关闭则跳过该步骤）
+  enabled: true
+  # SimHash 查重相似度阈值（0~1，≥ 视为重复，0.85 约等于海明距离 9 位）
+  simhash_threshold: 0.85
+  # 历史文案库（SQLite，自动创建）
+  history_db: ./workspace_data/originality_history.db
+  # 违禁词库文件（用户可编辑）
+  banned_words_file: ./config/banned_words.txt
+  # 命中违禁词时最多报告多少个
+  banned_words_max_report: 10
+  # 是否启用 LLM 语义级风控（mock 模式自动跳过）
+  llm_risk_check: true
+  # 命中违禁词时是否自动调 LLM 修正（替换为合规表达，避免流程卡死）
+  auto_fix_banned: true
 
 # 编排配置
 pipeline:

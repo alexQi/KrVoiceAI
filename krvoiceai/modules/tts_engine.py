@@ -1,6 +1,7 @@
 """TTS 声音克隆模块
 
-四种 provider：
+五种 provider：
+- moss_nano:  本地 MOSS-TTS-Nano ONNX（CPU 声音克隆，0.1B 模型，5s 样本零克隆）
 - mimo:       调用小米 MiMo TTS API（OpenAI 兼容 chat/completions 端点）
 - gpt_sovits: 调用云端 GPT-SoVITS API（声音克隆）
 - edge_tts:   使用 edge-tts 标准音色（无克隆，CPU 可跑）
@@ -33,7 +34,10 @@ class TTSEngine(BaseModule):
     """TTS 声音克隆/合成模块"""
 
     name = "tts"
-    requires_gpu = True  # 真实模式需要 GPU
+    requires_gpu = True  # 真实模式需要 GPU（moss_nano/edge_tts/mock 可纯 CPU 运行）
+
+    # 纯 CPU 可跑的 provider（不需要云端 GPU）
+    CPU_ONLY_PROVIDERS = {"moss_nano", "edge_tts", "mock"}
 
     def __init__(self, config=None, gpu_runner: GPURunner | None = None):
         super().__init__(config)
@@ -45,6 +49,8 @@ class TTSEngine(BaseModule):
         self.default_voice = self.config.get("tts.default_voice", "default")
         self.timeout = self.config.get("tts.timeout", 120)
         self.gpu = gpu_runner or GPURunner()
+        # MOSS-TTS-Nano 运行时（懒加载，首次 moss_nano 合成时初始化）
+        self._moss_runtime = None
 
     def setup(self) -> None:
         # 判断真实可用性
@@ -69,7 +75,11 @@ class TTSEngine(BaseModule):
 
         try:
             start = time.time()
-            if self.provider == "mimo":
+            if self.provider == "moss_nano":
+                audio_path, duration, timestamps = self._synth_moss_nano(
+                    text, voice_id, output_path
+                )
+            elif self.provider == "mimo":
                 audio_path, duration, timestamps = self._synth_mimo(
                     text, voice_id, output_path
                 )
@@ -103,6 +113,160 @@ class TTSEngine(BaseModule):
             )
         except Exception as e:
             return ModuleResult(success=False, error=str(e))
+
+    def _get_moss_runtime(self):
+        """懒加载 MOSS-TTS-Nano ONNX 运行时（仅依赖 onnxruntime + soundfile + sentencepiece）"""
+        if self._moss_runtime is not None:
+            return self._moss_runtime
+
+        import sys
+        from ..core.config import PROJECT_ROOT
+
+        cfg = self.config.get("tts.moss_nano", {}) or {}
+
+        # 路径解析策略：优先配置的绝对路径，其次相对 PROJECT_ROOT 解析，最后回退多个常见位置
+        candidates = []
+        raw_repo = cfg.get("repo_dir", "../../MOSS-TTS-Nano")
+        if Path(raw_repo).is_absolute():
+            candidates.append(Path(raw_repo))
+        else:
+            # 相对 PROJECT_ROOT（KrVoiceAI 目录）
+            candidates.append((PROJECT_ROOT / raw_repo).resolve())
+            candidates.append((PROJECT_ROOT / "../MOSS-TTS-Nano").resolve())
+            candidates.append(Path(raw_repo).resolve())
+
+        repo_dir = next((c for c in candidates if c.exists()), None)
+        if repo_dir is None:
+            raise RuntimeError(
+                f"MOSS-TTS-Nano 仓库不存在，已尝试: {[str(c) for c in candidates]}。"
+                f"请在设置中配置正确路径（tts.moss_nano.repo_dir）或克隆仓库"
+            )
+
+        # 把仓库根加入 sys.path 以便 import onnx_tts_runtime
+        repo_str = str(repo_dir)
+        if repo_str not in sys.path:
+            sys.path.insert(0, repo_str)
+
+        from onnx_tts_runtime import OnnxTtsRuntime  # type: ignore
+
+        # model_dir 解析：优先绝对路径 > 相对 repo_dir > 相对 PROJECT_ROOT > repo_dir/models
+        raw_model = cfg.get("model_dir")
+        model_candidates = []
+        if raw_model:
+            if Path(raw_model).is_absolute():
+                model_candidates.append(Path(raw_model))
+            else:
+                model_candidates.append((repo_dir / raw_model).resolve())
+                model_candidates.append((PROJECT_ROOT / raw_model).resolve())
+                # raw_model 可能就是相对 repo 的（如 ../../MOSS-TTS-Nano/models），尝试 ../前缀剥离
+                if raw_model.startswith("../"):
+                    model_candidates.append((repo_dir.parent / raw_model[3:]).resolve())
+        model_candidates.append((repo_dir / "models").resolve())
+        model_dir_path = next((c for c in model_candidates if c.exists()), model_candidates[-1])
+        model_dir = str(model_dir_path.resolve())
+        self._moss_runtime = OnnxTtsRuntime(
+            model_dir=model_dir,
+            thread_count=int(cfg.get("cpu_threads", 4)),
+            execution_provider=cfg.get("execution_provider", "cpu"),
+        )
+        self.logger.info(
+            f"MOSS-TTS-Nano 运行时已加载 repo={repo_dir} model_dir={model_dir}"
+        )
+        return self._moss_runtime
+
+    def _synth_moss_nano(
+        self, text: str, voice_id: str, output_path: Path
+    ) -> tuple[Path, float, list[dict]]:
+        """使用本地 MOSS-TTS-Nano ONNX 合成（支持声音克隆）
+
+        若 voice_id 对应音色目录下有 sample 音频，则用该音频做零样本声音克隆；
+        否则使用内置音色（如 Junhao）。
+        """
+        runtime = self._get_moss_runtime()
+        cfg = self.config.get("tts.moss_nano", {}) or {}
+
+        # 查找该音色的参考音频（用于声音克隆）
+        prompt_audio_path = None
+        builtin_voice = cfg.get("builtin_voice", "Junhao")
+        if voice_id and voice_id != "default":
+            voice_dir = self.voices_dir / voice_id
+            if voice_dir.exists():
+                # 找到任意 sample 音频
+                for ext in (".wav", ".mp3", ".flac", ".m4a"):
+                    candidates = list(voice_dir.glob(f"sample*{ext}")) + list(
+                        voice_dir.glob(f"*{ext}")
+                    )
+                    if candidates:
+                        prompt_audio_path = str(candidates[0].resolve())
+                        self.logger.info(
+                            f"MOSS 声音克隆 voice={voice_id} sample={prompt_audio_path}"
+                        )
+                        break
+
+        if prompt_audio_path is None:
+            self.logger.info(
+                f"MOSS 使用内置音色 voice={builtin_voice}（未找到克隆样本）"
+            )
+
+        self.logger.info(
+            f"MOSS-TTS-Nano 合成 voice={voice_id} text_len={len(text)}"
+        )
+
+        result = runtime.synthesize(
+            text=text,
+            voice=builtin_voice,
+            prompt_audio_path=prompt_audio_path,
+            output_audio_path=str(output_path.resolve()),
+            streaming=bool(cfg.get("realtime_streaming", True)),
+            max_new_frames=int(cfg.get("max_new_frames", 375)),
+            voice_clone_max_text_tokens=int(cfg.get("voice_clone_max_text_tokens", 75)),
+            enable_wetext=bool(cfg.get("enable_wetext", False)),
+            enable_normalize_tts_text=bool(cfg.get("enable_normalize_tts_text", True)),
+        )
+
+        audio_path = Path(result["audio_path"])
+        # MOSS 输出 48kHz 立体声 wav；转 16kHz 单声道供 Wav2Lip 使用
+        final_path = audio_path
+        try:
+            import subprocess
+            mono_path = output_path.parent / f"{output_path.stem}_16k.wav"
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(audio_path),
+                 "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                 str(mono_path)],
+                capture_output=True, timeout=30,
+            )
+            if mono_path.exists():
+                # 替换为 16k 单声道版本
+                audio_path.unlink(missing_ok=True)
+                mono_path.rename(output_path)
+                final_path = output_path
+        except Exception as e:
+            self.logger.warning(f"MOSS 音频转 16k 失败，使用原始输出: {e}")
+            if audio_path != output_path and audio_path.exists():
+                audio_path.rename(output_path)
+                final_path = output_path
+
+        duration = get_wav_duration(final_path)
+
+        # MOSS 不返回逐句时间戳，按分句估算（用于字幕对齐，后续 ASR 会校正）
+        segments = split_text_to_segments(text)
+        timestamps: list[dict] = []
+        offset = 0.0
+        total_chars = sum(len(s) for s in segments) or 1
+        for seg in segments:
+            seg_dur = duration * len(seg) / total_chars
+            timestamps.append({
+                "text": seg,
+                "start": round(offset, 3),
+                "end": round(offset + seg_dur, 3),
+            })
+            offset += seg_dur
+
+        self.logger.info(
+            f"MOSS-TTS-Nano 合成完成 duration={duration:.2f}s segments={len(segments)}"
+        )
+        return final_path, duration, timestamps
 
     def _synth_mimo(
         self, text: str, voice_id: str, output_path: Path
@@ -311,11 +475,16 @@ class TTSEngine(BaseModule):
         voice_dir.mkdir(parents=True, exist_ok=True)
 
         if self.provider != "gpt_sovits":
-            # Mock/edge 模式：本地保存样本音频
+            # moss_nano / mimo / edge 模式：本地保存样本音频（moss_nano 用做零样本克隆参考）
             import shutil
             dest = voice_dir / f"sample{sample_audio.suffix or '.wav'}"
             shutil.copy2(sample_audio, dest)
             self.logger.info(f"本地音色注册成功: {voice_id} -> {dest}")
+            # moss_nano: 若样本不是 wav/48k，尝试转为标准 wav（MOSS 内部会重采样，但保留原始更稳）
+            if self.provider == "moss_nano":
+                self.logger.info(
+                    f"音色 {voice_id} 已注册，MOSS 将用 {dest.name} 作为零样本克隆参考"
+                )
             return True
 
         try:

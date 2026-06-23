@@ -520,7 +520,10 @@ class FFmpegRunner:
 
         self.logger.info(f"整段切换: {len(segments)} 个片段拼接")
 
-        # 切分并统一编码每个片段
+        # 转场时长（秒）：B-roll 片段首尾各做淡入淡出，实现交叉溶解感
+        transition_dur = 0.4
+
+        # 切分并统一编码每个片段（B-roll 片段加淡入淡出转场）
         seg_files = []
         for i, (seg_start, seg_end, src, is_broll, clip) in enumerate(segments):
             seg_dur = seg_end - seg_start
@@ -532,47 +535,74 @@ class FFmpegRunner:
             src_path = Path(src)
             is_image = src_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
 
+            # B-roll 片段加淡入淡出转场
+            # 视频用 -vf 的 fade，音频用 -af 的 afade（不能混在一起）
+            vfade_filter = ""
+            afade_filter = ""
+            if is_broll and seg_dur > transition_dur * 2:
+                vfade_filter = (
+                    f",fade=t=in:st=0:d={transition_dur}"
+                    f",fade=t=out:st={seg_dur - transition_dur:.3f}:d={transition_dur}"
+                )
+                afade_filter = (
+                    f"afade=t=in:st=0:d={transition_dur},"
+                    f"afade=t=out:st={seg_dur - transition_dur:.3f}:d={transition_dur}"
+                )
+
+            base_vf = (
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"
+            )
+
             if is_broll and is_image:
-                # 图片转视频片段
+                # 图片转视频片段（无原音频，用静音轨）
                 args = [
                     "-loop", "1",
                     "-i", src,
                     "-f", "lavfi",
                     "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
                     "-t", f"{seg_dur:.3f}",
-                    "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
-                    "-c:v", "libx264",
-                    "-preset", "medium",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-shortest",
-                    str(seg_file),
+                    "-vf", base_vf + vfade_filter,
+                    "-af", afade_filter if afade_filter else "anull",
+                    "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest", str(seg_file),
                 ]
             elif is_broll:
-                # B-roll 视频片段，截取指定时长
+                # B-roll 视频片段（静音自身音频，主视频画外音由 concat 后的主轨保留）
                 args = [
                     "-i", src,
                     "-t", f"{seg_dur:.3f}",
-                    "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
-                    "-c:v", "libx264",
-                    "-preset", "medium",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-r", str(fps),
+                    "-vf", base_vf + vfade_filter,
+                    "-af", afade_filter if afade_filter else "anull",
+                    "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "192k", "-r", str(fps),
                     str(seg_file),
                 ]
             else:
-                # 主视频片段，截取指定时间段
+                # 主视频片段（数字人口播），在 B-roll 前后加淡出/淡入
+                main_vfade = ""
+                main_afade = ""
+                if seg_dur > transition_dur * 2:
+                    next_is_broll = (i + 1 < len(segments) and segments[i + 1][3])
+                    prev_is_broll = (i - 1 >= 0 and segments[i - 1][3])
+                    vfades = []
+                    afades = []
+                    if prev_is_broll:
+                        vfades.append(f"fade=t=in:st=0:d={transition_dur}")
+                        afades.append(f"afade=t=in:st=0:d={transition_dur}")
+                    if next_is_broll:
+                        vfades.append(f"fade=t=out:st={seg_dur - transition_dur:.3f}:d={transition_dur}")
+                        afades.append(f"afade=t=out:st={seg_dur - transition_dur:.3f}:d={transition_dur}")
+                    if vfades:
+                        main_vfade = "," + ",".join(vfades)
+                        main_afade = ",".join(afades)
                 args = [
                     "-ss", f"{seg_start:.3f}",
                     "-i", src,
                     "-t", f"{seg_dur:.3f}",
-                    "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p",
+                    "-vf", base_vf + main_vfade,
+                    "-af", main_afade if main_afade else "anull",
                     "-c:v", "libx264",
                     "-preset", "medium",
                     "-pix_fmt", "yuv420p",
@@ -700,5 +730,195 @@ class FFmpegRunner:
             str(output),
         ]
         self.logger.info(f"添加淡入淡出: in={fade_in}s out={fade_out}s -> {output.name}")
+        self.run(args)
+        return output
+
+    def to_portrait(
+        self,
+        video: Path,
+        output: Path,
+        target_resolution: tuple[int, int] = (1080, 1920),
+        fps: int = 30,
+        background: str = "blur",
+    ) -> Path:
+        """横屏视频转竖屏（口播标准做法：人脸居中 + 背景填充）
+
+        Args:
+            video: 横屏输入视频（如 Wav2Lip 输出 1920x1080）
+            output: 竖屏输出视频（1080x1920）
+            target_resolution: 目标竖屏分辨率 (w, h)
+            fps: 帧率
+            background: 背景填充方式
+                - blur: 原视频放大+模糊作背景（最自然，主流口播做法）
+                - black: 纯黑背景
+        """
+        video = Path(video)
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        tw, th = target_resolution
+
+        if background == "blur":
+            # 模糊背景：原视频放大铺满竖屏并模糊 → 上面叠加居中的原比例视频
+            # 同时保留音频（若无音频流则用静音轨，避免后续 concat 报错）
+            vf = (
+                f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,"
+                f"crop={tw}:{th},boxblur=20:5[bg];"
+                f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=decrease[fg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
+            )
+            args = [
+                "-i", str(video),
+                "-filter_complex", vf,
+                "-map", "[v]",
+                "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-r", str(fps),
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(output),
+            ]
+            # 音频：优先用原视频音频，没有则加静音轨
+            # 先尝试带音频转换，失败则用静音轨重试
+            try:
+                args_with_audio = args[:3] + ["-map", "0:a?"] + args[3:]
+                self.run(args_with_audio)
+                # 检查输出是否有音频流
+                import subprocess as _sp
+                r = _sp.run(
+                    [self.ffprobe, "-v", "error", "-select_streams", "a",
+                     "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(output)],
+                    capture_output=True, text=True,
+                )
+                if "audio" in r.stdout:
+                    return output
+                # 无音频流，落入下面加静音轨
+            except Exception:
+                pass
+            # 加静音音频轨（确保输出一定有音频流，供后续 concat）
+            args_silent = [
+                "-i", str(video),
+                "-f", "lavfi", "-t", "1", "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
+                "-filter_complex", vf,
+                "-map", "[v]", "-map", "1:a",
+                "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-r", str(fps),
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest", "-movflags", "+faststart",
+                str(output),
+            ]
+            self.run(args_silent)
+        else:
+            bg_color = "black"
+            vf = (
+                f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+                f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color={bg_color},fps={fps}"
+            )
+            args = [
+                "-i", str(video),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(output),
+            ]
+
+        self.logger.info(
+            f"横屏→竖屏: {video.name} -> {tw}x{th} (背景={background})"
+        )
+        self.run(args)
+        return output
+
+    def add_micro_motion(
+        self,
+        video: Path,
+        output: Path,
+        width: int = 1080,
+        height: int = 1920,
+        fps: int = 30,
+        breathing_scale: float = 0.02,
+        breathing_period: float = 4.0,
+        shake_amplitude: float = 0.3,
+        shake_period: float = 2.0,
+        blink_enabled: bool = True,
+        blink_interval: float = 4.0,
+    ) -> Path:
+        """数字人微动作层（FFmpeg 后处理）
+
+        给静态照片/Wav2Lip 输出叠加三层微动作，缓解"只有嘴动"的恐怖谷：
+          1. 呼吸缩放：缓慢的 zoompan 缩放 1.0 ± breathing_scale（正弦周期）
+          2. 微抖动：rotate ±shake_amplitude 度正弦摆动（模拟手持/呼吸晃动）
+          3. 眨眼节奏：周期性极短亮度脉冲（近似闭眼，避免引入人脸检测重依赖）
+
+        全部用 FFmpeg 表达式实现，单条命令完成，无需抽帧，CPU 即可。
+
+        Args:
+            video: 输入口播视频
+            output: 输出视频
+            width/height/fps: 输出参数（与 composer 对齐）
+            breathing_scale: 呼吸缩放幅度（0.02 = ±2%）
+            breathing_period: 呼吸周期（秒）
+            shake_amplitude: 摆动幅度（度，0.3 = ±0.3°）
+            shake_period: 摆动周期（秒）
+            blink_enabled: 是否启用眨眼亮度节奏
+            blink_interval: 眨眼间隔（秒）
+        """
+        video = Path(video)
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        import math
+        # ===== 滤镜表达式说明 =====
+        # zoompan 支持 on（帧序号）变量；rotate/eq 只支持 t（时间秒）变量。
+        # 故呼吸缩放用 on（zoompan 内），抖动和眨眼用 t（rotate/eq 内）。
+
+        # 呼吸缩放：zoompan 的 z 用正弦（基于帧序号 on）
+        omega_breathe = (2 * math.pi) / (breathing_period * fps)
+        zoom_expr = f"1.0+{breathing_scale}*sin(on*{omega_breathe:.6f})"
+
+        # 微抖动：rotate 用 t（弧度）
+        omega_shake = (2 * math.pi) / shake_period
+        shake_rad = math.radians(shake_amplitude)
+        rotate_expr = f"{shake_rad:.6f}*sin(t*{omega_shake:.6f})"
+
+        # 眨眼：eq.brightness 用 t（时间秒），周期性轻微亮度波动
+        # 让画面有"活物感"，避免引入人脸检测重依赖
+        blink_filter = ""
+        if blink_enabled:
+            omega_blink = (2 * math.pi) / blink_interval
+            # 注意 eq 的 brightness 表达式不支持 on，必须用 t
+            blink_filter = (
+                f",eq=brightness=0.02*sin(t*{omega_blink:.6f}):contrast=1.0"
+            )
+
+        # 组合滤镜链：
+        # 1. zoompan 做呼吸缩放（居中）— 用 on
+        # 2. rotate 做微抖动 — 用 t，填充黑色边缘
+        # 3. eq 做眨眼亮度节奏 — 用 t
+        # 4. crop 去掉旋转黑边
+        vf = (
+            f"zoompan=z='{zoom_expr}':d=1:x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
+            f":s={width}x{height}:fps={fps},"
+            f"rotate='{rotate_expr}':ow=rotw({rotate_expr}):oh=roth({rotate_expr})"
+            f":c=black{blink_filter},"
+            f"crop={width}:{height}:(in_w-{width})/2:(in_h-{height})/2,"
+            f"scale={width}:{height}"
+        )
+
+        args = [
+            "-i", str(video),
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-pix_fmt", "yuv420p",
+            "-r", str(fps),
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(output),
+        ]
+        self.logger.info(
+            f"微动作层: breathe=±{breathing_scale*100:.1f}%/{breathing_period}s "
+            f"shake=±{shake_amplitude}°/{shake_period}s blink={blink_enabled} "
+            f"-> {output.name}"
+        )
         self.run(args)
         return output

@@ -29,16 +29,17 @@ class StepStatus(str, Enum):
 
 # 流水线步骤定义（顺序执行）
 PIPELINE_STEPS = [
-    "script_extract",   # 文案提取（可选）
-    "script_write",     # 文案生成/润色
-    "tts",              # 语音合成
-    "avatar",           # 数字人生成
-    "subtitle",         # 字幕生成
-    "broll",            # B-roll 画中画/插播视频（可选）
-    "title",            # 标题生成（compose 前需要，用于封面）
-    "cover",            # 封面生成（compose 前需要，用于封面首帧）
-    "compose",          # 视频合成（字幕+BGM+滤镜+水印+片头片尾+封面首帧）
-    "publish",          # 发布
+    "script_extract",      # 文案提取（可选）
+    "script_write",        # 文案生成/润色
+    "originality_check",   # 文案查重 + 违禁词 + LLM 风控（可选，失败可回退重写）
+    "tts",                 # 语音合成
+    "avatar",              # 数字人生成
+    "subtitle",            # 字幕生成
+    "broll",               # B-roll 画中画/插播视频（可选）
+    "title",               # 标题生成（compose 前需要，用于封面）
+    "cover",               # 封面生成（compose 前需要，用于封面首帧）
+    "compose",             # 视频合成（字幕+BGM+滤镜+水印+片头片尾+封面首帧）
+    "publish",             # 发布
 ]
 
 

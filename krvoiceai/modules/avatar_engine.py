@@ -44,54 +44,109 @@ class AvatarEngine(BaseModule):
         # Wav2Lip 配置
         self.wav2lip_config = self.config.get("avatar.wav2lip", {})
         self.wav2lip_checkpoint = self.wav2lip_config.get(
-            "checkpoint_path", "./Wav2Lip/checkpoints/wav2lip.pth"
+            "checkpoint_path", "./Wav2Lip/checkpoints/wav2lip_gan.pth"
         )
+        self.wav2lip_env_python = self.wav2lip_config.get(
+            "env_python", "../wav2lip_env/Scripts/python.exe"
+        )
+        self.wav2lip_inference_script = self.wav2lip_config.get(
+            "inference_script", "../Wav2Lip/inference.py"
+        )
+        # 微动作配置
+        self.micro_motion_cfg = self.config.get("avatar.micro_motion", {}) or {}
+        # GFPGAN 人脸增强配置
+        self.gfpgan_cfg = self.config.get("avatar.gfpgan", {}) or {}
         self.gpu = gpu_runner or GPURunner()
         self.ffmpeg = ffmpeg or FFmpegRunner()
 
     def setup(self) -> None:
         if self.provider == "wav2lip":
-            checkpoint = Path(self.wav2lip_checkpoint)
-            if not checkpoint.exists():
+            # Wav2Lip 真实运行需要独立 Python3.8 环境（torch 1.13 等）
+            # 不再静默降级到 mock —— 用户明确要求真实唇形同步
+            ready, reason = self._check_wav2lip_env()
+            if not ready:
+                # 环境未就绪：保持 provider=wav2lip，run() 时会给出明确报错
                 self.logger.warning(
-                    f"Wav2Lip 模型不存在: {checkpoint}，降级到 mock 模式"
+                    f"Wav2Lip 环境未就绪: {reason}。"
+                    f"请运行 scripts/setup_wav2lip_env.bat 安装，"
+                    f"或将 avatar.provider 改为 mock 跳过真实唇形同步。"
                 )
-                self.provider = "mock"
             else:
-                # 检查 Wav2Lip 依赖是否可用（torch/librosa/scipy/cv2）
-                deps_ok = self._check_wav2lip_deps()
-                if not deps_ok:
-                    self.logger.warning(
-                        "Wav2Lip 依赖缺失（torch/librosa/scipy/cv2），降级到 mock 模式"
-                    )
-                    self.provider = "mock"
-                else:
-                    self.logger.info(f"数字人模块初始化 provider=wav2lip, checkpoint={checkpoint.name}")
+                self.logger.info(
+                    f"数字人模块初始化 provider=wav2lip "
+                    f"checkpoint={Path(self.wav2lip_checkpoint).name} "
+                    f"env={Path(self.wav2lip_env_python).name}"
+                )
         elif self.provider in ("musetalk", "latentsync", "echomimic"):
             available = self.gpu.health_check_avatar()
             if not available:
                 self.logger.warning(
-                    f"{self.provider} 服务不可用，降级到 mock 模式"
+                    f"{self.provider} 云端服务不可用，将报错（不再静默降级 mock）"
                 )
-                self.provider = "mock"
             else:
                 self.logger.info(f"数字人模块初始化 provider={self.provider}")
         else:
             self.logger.info(f"数字人模块初始化 provider={self.provider}")
         super().setup()
 
-    @staticmethod
-    def _check_wav2lip_deps() -> bool:
-        """检查 Wav2Lip 运行所需的 Python 依赖是否可用"""
-        missing = []
-        for mod in ("torch", "librosa", "scipy", "cv2", "numpy"):
-            try:
-                __import__(mod)
-            except ImportError:
-                missing.append(mod)
-        if missing:
-            return False
-        return True
+    def _check_wav2lip_env(self) -> tuple[bool, str]:
+        """检查 Wav2Lip 独立运行环境是否就绪
+
+        不再静默降级。返回 (ready, reason)。
+        ready=True 表示可真实推理；ready=False 时 reason 给出具体缺失项和指引。
+        """
+        from ..core.config import PROJECT_ROOT
+        project_root = Path(PROJECT_ROOT)
+
+        def _abs(p: str) -> Path:
+            path = Path(p)
+            return path if path.is_absolute() else (project_root / p).resolve()
+
+        # 1. 独立 Python 环境存在
+        env_python = _abs(self.wav2lip_env_python)
+        if not env_python.exists():
+            return False, (
+                f"独立 Python 环境不存在: {env_python}。"
+                f"请运行 scripts/setup_wav2lip_env.bat 创建 wav2lip_env。"
+            )
+
+        # 2. 推理脚本存在
+        script = _abs(self.wav2lip_inference_script)
+        if not script.exists():
+            return False, f"Wav2Lip 推理脚本不存在: {script}"
+
+        # 3. 模型权重存在
+        ckpt = _abs(self.wav2lip_checkpoint)
+        if not ckpt.exists():
+            return False, (
+                f"模型权重不存在: {ckpt}。"
+                f"请从 hf-mirror 下载 wav2lip_gan.pth。"
+            )
+
+        # 4. 依赖（torch/librosa）能在独立环境 import
+        try:
+            result = subprocess.run(
+                [str(env_python), "-c",
+                 "import torch, librosa, cv2, numpy, scipy; "
+                 "print('deps ok', torch.__version__)"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                return False, (
+                    f"wav2lip_env 依赖缺失: {result.stderr[-200:]}。"
+                    f"请在该环境执行 pip install torch librosa opencv-python scipy。"
+                )
+        except Exception as e:
+            return False, f"检测 wav2lip_env 依赖异常: {e}"
+
+        return True, "ok"
+
+    def _check_wav2lip_deps(self) -> bool:
+        """[已废弃] 检查主环境依赖 —— 改用 _check_wav2lip_env 检测独立环境
+
+        保留仅为向后兼容。Wav2Lip 现在用独立 Python 3.8 环境，主环境无需这些依赖。
+        """
+        return False
 
     def run(self, ctx: JobContext) -> ModuleResult:
         """根据 ctx.audio_path 生成口播视频"""
@@ -104,11 +159,22 @@ class AvatarEngine(BaseModule):
         try:
             start = time.time()
             if self.provider == "wav2lip":
+                # 真实 Wav2Lip：环境未就绪必须报错（不静默降级）
+                ready, reason = self._check_wav2lip_env()
+                if not ready:
+                    return ModuleResult(
+                        success=False,
+                        error=f"Wav2Lip 环境未就绪: {reason}",
+                    )
                 video_path = self._generate_wav2lip(ctx, avatar_id, output_path)
             elif self.provider == "mock":
                 video_path = self._generate_mock(ctx, avatar_id, output_path)
             else:
                 video_path = self._generate_cloud(ctx, avatar_id, output_path)
+
+            # 微动作后处理（可选，缓解静态照片/低质量数字人的恐怖谷）
+            if self.micro_motion_cfg.get("enabled", False):
+                video_path = self._apply_micro_motion(video_path, ctx)
 
             ctx.raw_video_path = video_path
             ctx.metadata["avatar_provider"] = self.provider
@@ -162,38 +228,51 @@ class AvatarEngine(BaseModule):
             self.ffmpeg.convert_audio(audio_path, wav_path)
             audio_path = wav_path
 
-        # 调用 Wav2Lip 推理
-        wav2lip_dir = Path(self.wav2lip_checkpoint).parent.parent  # Wav2Lip 根目录
-        temp_dir = ctx.work_dir / "wav2lip_temp"
-        temp_dir.mkdir(exist_ok=True)
+        # 调用 Wav2Lip 推理（使用独立的 Python 3.8 环境，非主项目 3.12）
+        # 解析路径为绝对路径（配置里的相对路径基于项目根目录）
+        from ..core.config import PROJECT_ROOT
+        project_root = Path(PROJECT_ROOT)
+
+        def _abs(p: str) -> Path:
+            path = Path(p)
+            return path if path.is_absolute() else (project_root / p).resolve()
+
+        env_python = _abs(self.wav2lip_env_python)
+        inference_script = _abs(self.wav2lip_inference_script)
 
         # 使用绝对路径（Wav2Lip 从自身目录运行，相对路径会失效）
-        checkpoint_abs = Path(self.wav2lip_checkpoint).resolve()
+        checkpoint_abs = _abs(self.wav2lip_checkpoint)
         face_abs = Path(face_path).resolve()
         audio_abs = Path(audio_path).resolve()
         output_abs = Path(output_path).resolve()
 
+        # wav2lip_env 的 site-packages 在 PYTHONPATH，需保证用独立解释器
         cmd = [
-            sys.executable, "inference.py",
+            str(env_python), str(inference_script),
             "--checkpoint_path", str(checkpoint_abs),
             "--face", str(face_abs),
             "--audio", str(audio_abs),
             "--outfile", str(output_abs),
             "--pads", *[str(p) for p in self.wav2lip_config.get("pads", [0, 20, 0, 0])],
-            "--face_det_batch_size", str(self.wav2lip_config.get("face_det_batch_size", 4)),
-            "--wav2lip_batch_size", str(self.wav2lip_config.get("wav2lip_batch_size", 8)),
+            "--face_det_batch_size", str(self.wav2lip_config.get("face_det_batch_size", 8)),
+            "--wav2lip_batch_size", str(self.wav2lip_config.get("wav2lip_batch_size", 16)),
             "--resize_factor", str(self.wav2lip_config.get("resize_factor", 1)),
         ]
         if self.wav2lip_config.get("nosmooth", False):
             cmd.append("--nosmooth")
 
-        self.logger.info(f"运行 Wav2Lip 推理 (CPU模式，可能需要数分钟)...")
+        self.logger.info(
+            f"运行 Wav2Lip 推理 (CPU模式, env={env_python.parent.parent.name})，"
+            f"音频 {ctx.audio_duration:.1f}s，预计耗时数分钟至数十分钟..."
+        )
+        # Wav2Lip 推理脚本内部加载依赖文件用相对路径，必须在 Wav2Lip 根目录运行
+        wav2lip_root = inference_script.parent
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=1800,  # 30分钟超时
-            cwd=str(wav2lip_dir),
+            timeout=3600,  # 60分钟超时（长视频 CPU 模式可能很久）
+            cwd=str(wav2lip_root),
         )
 
         if result.returncode != 0:
@@ -207,25 +286,124 @@ class AvatarEngine(BaseModule):
             f"Wav2Lip 唇形同步完成: {output_path.name} "
             f"({output_path.stat().st_size // 1024}KB)"
         )
-        return output_path
+
+        # GFPGAN 人脸增强（可选，提升脸部清晰度，CPU 可跑但较慢）
+        # 在竖屏转换前增强（横屏原始分辨率，增强效果更好）
+        if self.gfpgan_cfg.get("enabled", False):
+            enhanced = self._enhance_with_gfpgan(output_path, ctx)
+            if enhanced:
+                output_path = enhanced
+
+        # Wav2Lip 输出尺寸 = face 输入尺寸（通常横屏，如 1920x1080）
+        # 转成竖屏 1080x1920（人脸居中 + 模糊背景，主流口播做法）
+        portrait_path = ctx.work_dir / "avatar_portrait.mp4"
+        try:
+            self.ffmpeg.to_portrait(
+                video=output_path,
+                output=portrait_path,
+                target_resolution=self.output_resolution,
+                fps=self.output_fps,
+                background="blur",
+            )
+            return portrait_path
+        except Exception as e:
+            self.logger.warning(
+                f"竖屏转换失败，使用原始横屏输出: {e}"
+            )
+            return output_path
+
+    def _enhance_with_gfpgan(self, video_path: Path, ctx: JobContext) -> Path | None:
+        """GFPGAN 人脸增强（提升 Wav2Lip 脸部清晰度，带唇形保护）
+
+        通过 wav2lip_env 独立 Python 调用 enhance.py：
+        - GFPGAN 逐帧增强（weight=0.5 降侵略性）
+        - 嘴部 mask 贴回保护 Wav2Lip 唇形精度
+        CPU 模式 10 秒视频约需 5-15 分钟。
+
+        Returns:
+            增强后的视频路径；失败返回 None（降级用原视频）
+        """
+        from ..core.config import PROJECT_ROOT
+        project_root = Path(PROJECT_ROOT)
+
+        def _abs(p: str) -> Path:
+            path = Path(p)
+            return path if path.is_absolute() else (project_root / p).resolve()
+
+        env_python = _abs(self.wav2lip_env_python)
+        enhance_script = _abs(self.gfpgan_cfg.get("enhance_script", "../wav2lip_env/enhance.py"))
+        model_path = _abs(self.gfpgan_cfg.get("model_path", "../Wav2Lip/gfpgan_weights/GFPGANv1.4.pth"))
+        weight = self.gfpgan_cfg.get("weight", 0.5)
+        device = self.gfpgan_cfg.get("device", "cpu")
+
+        # 环境检查
+        if not env_python.exists() or not enhance_script.exists() or not model_path.exists():
+            self.logger.warning(
+                f"GFPGAN 环境不完整（env/script/model），跳过增强。"
+                f"script={enhance_script.exists()} model={model_path.exists()}"
+            )
+            return None
+
+        enhanced_path = ctx.work_dir / "avatar_enhanced.mp4"
+        cmd = [
+            str(env_python), str(enhance_script),
+            "--input", str(video_path.resolve()),
+            "--output", str(enhanced_path.resolve()),
+            "--model", str(model_path),
+            "--weight", str(weight),
+            "--device", device,
+        ]
+        self.logger.info(
+            f"GFPGAN 人脸增强（{device} 模式，weight={weight}），"
+            f"CPU 可能需要数分钟至数十分钟..."
+        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=7200,  # 2小时超时
+            )
+            if result.returncode != 0:
+                self.logger.warning(
+                    f"GFPGAN 增强失败（返回码{result.returncode}），用原视频: "
+                    f"{result.stderr[-300:]}"
+                )
+                return None
+            if not enhanced_path.exists():
+                self.logger.warning("GFPGAN 增强完成但输出文件不存在，用原视频")
+                return None
+            self.logger.info(
+                f"GFPGAN 增强完成: {enhanced_path.name} "
+                f"({enhanced_path.stat().st_size // 1024}KB)"
+            )
+            return enhanced_path
+        except subprocess.TimeoutExpired:
+            self.logger.warning("GFPGAN 增强超时，用原视频")
+            return None
+        except Exception as e:
+            self.logger.warning(f"GFPGAN 增强异常，用原视频: {e}")
+            return None
 
     def _get_avatar_reference(self, avatar_id: str) -> Path | None:
-        """获取数字人参考照片或视频
+        """获取数字人参考素材
 
-        优先级：reference.jpg > reference.png > reference_video.mp4 > avatar.jpg
+        Wav2Lip 视频驱动模式（保留原视频头部动作+表情，只换嘴型）：
+          优先级：reference_video.mp4 > reference.mp4 > avatar.mp4
+                  > reference.jpg > reference.png > avatar.jpg
+
+        视频输入让 Wav2Lip 逐帧保留原视频的姿态/表情/手势，只重绘嘴部；
+        照片输入会退化成"静态照片+嘴动"（头不动），仅作降级。
         """
         avatar_dir = self.avatars_dir / avatar_id
         if not avatar_dir.exists():
             return None
 
-        # 优先查找参考照片
-        for name in ("reference.jpg", "reference.png", "avatar.jpg", "avatar.png"):
+        # 优先查找参考视频（视频驱动 = 保留原动作）
+        for name in ("reference_video.mp4", "reference.mp4", "avatar.mp4"):
             p = avatar_dir / name
             if p.exists():
                 return p
 
-        # 其次查找参考视频
-        for name in ("reference_video.mp4", "reference.mp4", "avatar.mp4"):
+        # 降级：参考照片（照片驱动 = 头不动，仅嘴动）
+        for name in ("reference.jpg", "reference.png", "avatar.jpg", "avatar.png"):
             p = avatar_dir / name
             if p.exists():
                 return p
@@ -235,7 +413,7 @@ class AvatarEngine(BaseModule):
     def _generate_cloud(
         self, ctx: JobContext, avatar_id: str, output_path: Path
     ) -> Path:
-        """调用云端数字人 API"""
+        """调用云端数字人 API（LatentSync / MuseTalk / EchoMimic）"""
         self.logger.info(
             f"云端数字人生成 provider={self.provider} "
             f"avatar={avatar_id} audio={ctx.audio_path}"
@@ -250,7 +428,21 @@ class AvatarEngine(BaseModule):
             "output_fps": self.output_fps,
             "output_resolution": list(self.output_resolution),
         }
+
+        # LatentSync 专用参数（覆盖云端默认）
+        if self.provider == "latentsync":
+            ls_cfg = self.config.get("avatar.latentsync", {}) or {}
+            payload["inference_steps"] = ls_cfg.get("inference_steps", 25)
+            payload["resolution"] = ls_cfg.get("resolution", 512)
+            payload["config_name"] = ls_cfg.get("config", "high_quality")
+
         resp = self.gpu.call_avatar(payload)
+
+        # 记录实际使用的后端（云端返回）
+        backend = resp.get("backend")
+        if backend:
+            ctx.metadata["avatar_backend"] = backend
+            self.logger.info(f"云端实际后端: {backend}")
 
         video_b64 = resp.get("video_base64") or resp.get("data", {}).get("video_base64")
         if not video_b64:
@@ -293,6 +485,49 @@ class AvatarEngine(BaseModule):
         )
         self.logger.info(f"Mock 数字人视频生成完成: {output_path}")
         return output_path
+
+    def _apply_micro_motion(self, video_path: Path, ctx: JobContext) -> Path:
+        """应用微动作层（FFmpeg 后处理）
+
+        给数字人口播视频叠加：呼吸缩放 + 微抖动 + 眨眼亮度节奏。
+        纯 FFmpeg 实现，CPU 即可，缓解"只有嘴动"的恐怖谷。
+        失败时降级返回原视频（不阻断流程）。
+        """
+        output_path = ctx.work_dir / "avatar_with_motion.mp4"
+        w, h = self.output_resolution
+        try:
+            result_path = self.ffmpeg.add_micro_motion(
+                video=video_path,
+                output=output_path,
+                width=w,
+                height=h,
+                fps=self.output_fps,
+                breathing_scale=float(
+                    self.micro_motion_cfg.get("breathing_scale", 0.02)
+                ),
+                breathing_period=float(
+                    self.micro_motion_cfg.get("breathing_period", 4.0)
+                ),
+                shake_amplitude=float(
+                    self.micro_motion_cfg.get("shake_amplitude", 0.3)
+                ),
+                shake_period=float(
+                    self.micro_motion_cfg.get("shake_period", 2.0)
+                ),
+                blink_enabled=bool(
+                    self.micro_motion_cfg.get("blink_enabled", True)
+                ),
+                blink_interval=float(
+                    self.micro_motion_cfg.get("blink_interval", 4.0)
+                ),
+            )
+            self.logger.info(f"微动作层应用完成: {result_path.name}")
+            return result_path
+        except Exception as e:
+            self.logger.warning(
+                f"微动作层应用失败，降级使用原视频: {e}"
+            )
+            return video_path
 
     def _get_avatar_image(self, avatar_id: str) -> Path:
         """获取数字人头像图片
@@ -446,7 +681,6 @@ class AvatarEngine(BaseModule):
         elif self.provider == "mock":
             # Mock 模式：从视频抽一帧作为参考图
             try:
-                import subprocess
                 ref_img = avatar_dir / "reference.jpg"
                 subprocess.run(
                     [

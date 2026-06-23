@@ -79,11 +79,14 @@ class BRollEngine(BaseModule):
         try:
             start = time.time()
             # 按 mode 分组处理
-            pip_clips = [c for c in valid_clips if c.get("mode", "pip") == "pip"]
-            cut_clips = [c for c in valid_clips if c.get("mode", "pip") == "cut"]
+            # mode 默认为 cut（整段画面替换，对标旗博士/剪映的 B-roll 插播）
+            #   cut: 指定时间段全屏替换为 B-roll 画面，数字人被遮挡，保留画外音
+            #   pip: 右上角小窗叠加（数字人仍全屏可见）
+            pip_clips = [c for c in valid_clips if c.get("mode", "cut") == "pip"]
+            cut_clips = [c for c in valid_clips if c.get("mode", "cut") == "cut"]
 
             self.logger.info(
-                f"B-roll 处理: {len(pip_clips)} 个画中画 + {len(cut_clips)} 个整段切换"
+                f"B-roll 处理: {len(cut_clips)} 个整段插播 + {len(pip_clips)} 个画中画小窗"
             )
 
             current_video = ctx.raw_video_path
@@ -164,8 +167,8 @@ class BRollEngine(BaseModule):
             shutil.copy2(video_path, output_path)
             return output_path
 
-        pip_clips = [c for c in valid_clips if c.get("mode", "pip") == "pip"]
-        cut_clips = [c for c in valid_clips if c.get("mode", "pip") == "cut"]
+        pip_clips = [c for c in valid_clips if c.get("mode", "cut") == "pip"]
+        cut_clips = [c for c in valid_clips if c.get("mode", "cut") == "cut"]
 
         current = video_path
         if cut_clips:

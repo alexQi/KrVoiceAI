@@ -56,7 +56,7 @@ def avatar_client(tmp_path, monkeypatch):
     import importlib
     from krvoiceai.api import avatar_server
     importlib.reload(avatar_server)
-    avatar_server._avatar_model = None
+    avatar_server._avatar_backend = None  # 重置后端缓存
     avatar_server._avatars_dir = avatars_dir
 
     return TestClient(avatar_server.app), avatars_dir
@@ -163,13 +163,16 @@ def test_tts_synthesize_success(tts_client):
 # ============================================
 
 def test_avatar_health(avatar_client):
-    """数字人健康检查"""
+    """数字人健康检查（v2 API 含 backend 字段）"""
     client, _ = avatar_client
     r = client.get("/health")
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "ok"
     assert data["service"] == "avatar"
+    # v2 新增字段
+    assert "backend" in data
+    assert "backend_ready" in data
 
 
 def test_avatar_register(avatar_client):
@@ -199,7 +202,7 @@ def test_avatar_generate_not_registered(avatar_client):
 
 
 def test_avatar_generate_success(avatar_client):
-    """生成数字人视频（占位实现：参考视频 + 音频合成）"""
+    """生成数字人视频（后端未装时用 ffmpeg 占位降级）"""
     client, avatars_dir = avatar_client
     # 先注册形象
     video_b64 = base64.b64encode(_make_mp4_bytes()).decode()
@@ -219,8 +222,34 @@ def test_avatar_generate_success(avatar_client):
     data = r.json()
     assert "video_base64" in data
     assert data["avatar_id"] == "a1"
+    # v2 新增：返回实际使用的后端
+    assert "backend" in data
+    # 未装推理依赖时应降级为 placeholder
+    assert data["backend"] in ("placeholder", "latentsync", "musetalk")
     # 验证返回的视频可解码（mp4 文件以 ftyp box 开头）
     video_bytes = base64.b64decode(data["video_base64"])
     assert len(video_bytes) > 100
     # mp4 文件头：4 字节 box size + 'ftyp' 标识
     assert video_bytes[4:8] == b'ftyp'
+
+
+def test_avatar_generate_with_latentsync_params(avatar_client):
+    """生成时传 LatentSync 专用参数（inference_steps/resolution/config_name）"""
+    client, avatars_dir = avatar_client
+    video_b64 = base64.b64encode(_make_mp4_bytes()).decode()
+    client.post("/api/avatar/register", json={
+        "avatar_id": "a2",
+        "reference_video_base64": video_b64,
+    })
+    audio_b64 = base64.b64encode(_make_wav_bytes(duration=0.5)).decode()
+    r = client.post("/api/avatar/generate", json={
+        "audio_base64": audio_b64,
+        "avatar_id": "a2",
+        "inference_steps": 50,      # 高质量
+        "resolution": 512,
+        "config_name": "high_quality",
+    })
+    assert r.status_code == 200
+    data = r.json()
+    # 即使后端未装（placeholder），参数也应被接受不报错
+    assert "video_base64" in data

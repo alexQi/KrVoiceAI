@@ -196,3 +196,61 @@ def test_job_listing(orchestrator):
     job_ids = [j["job_id"] for j in jobs]
     assert id1 in job_ids
     assert id2 in job_ids
+
+
+# ============ 产物完整性校验测试 ============
+
+def test_validate_artifact_corrupted_audio(orchestrator):
+    """损坏的音频文件 → 校验失败"""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp())
+    # 写一个 < 100 字节的假音频
+    fake_audio = tmp / "broken.wav"
+    fake_audio.write_bytes(b"not a real audio file")
+    assert orchestrator._validate_artifact(fake_audio, "audio") is False
+
+
+def test_validate_artifact_corrupted_video(orchestrator, tmp_path):
+    """损坏的视频文件 → 校验失败（ffprobe 探测时长为 0）"""
+    fake_video = tmp_path / "broken.mp4"
+    fake_video.write_bytes(b"not a real video" * 10)  # >100B 但不是视频
+    assert orchestrator._validate_artifact(fake_video, "video") is False
+
+
+def test_validate_artifact_valid(orchestrator, tmp_path):
+    """有效音频文件 → 校验通过"""
+    from krvoiceai.core.audio_utils import generate_silent_wav
+    audio = tmp_path / "ok.wav"
+    generate_silent_wav(audio, 1.0)
+    assert orchestrator._validate_artifact(audio, "audio") is True
+
+
+def test_validate_artifact_nonexistent(orchestrator):
+    """不存在的文件 → 校验失败"""
+    assert orchestrator._validate_artifact(
+        Path("/nonexistent/file.wav"), "audio"
+    ) is False
+
+
+def test_load_context_skips_corrupted(orchestrator, isolated_config, tmp_path):
+    """断点续跑时跳过损坏产物 → 从该步骤重跑"""
+    from krvoiceai.core.base_module import JobContext
+    from krvoiceai.core.audio_utils import generate_silent_wav
+
+    # 模拟一个任务：先正常跑通到 tts，产出音频
+    job_id = orchestrator.submit_job(script="测试损坏产物续跑")
+    work_dir = Path(orchestrator.storage.job_dir(job_id))
+
+    # 手动写一个 context.json，但 audio_path 指向损坏文件
+    broken_audio = work_dir / "broken.wav"
+    broken_audio.write_bytes(b"broken")
+    ctx_file = work_dir / "context.json"
+    ctx_file.write_text(
+        f'{{"job_id":"{job_id}","script_text":"测试","audio_path":"{broken_audio}","audio_duration":2.0}}',
+        encoding="utf-8",
+    )
+
+    ctx = orchestrator._build_context(job_id, orchestrator.get_status(job_id)["input"])
+    # 损坏音频应被忽略（未恢复到 ctx）
+    assert ctx.audio_path is None or not ctx.audio_path.exists()
+

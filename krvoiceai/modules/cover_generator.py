@@ -215,16 +215,16 @@ class CoverGenerator(BaseModule):
         draw = ImageDraw.Draw(img)
         w, h = self.resolution
 
-        # 加载字体（根据布局调整字号）
+        # 加载字体（根据布局调整字号，对标抖音爆款大字封面）
         if self.layout == "full":
-            font_size = 120
-        else:
-            font_size = 90
+            font_size = 140
+        else:  # bottom（口播标准：人物上2/3 + 标题下1/3）
+            font_size = 110
         font = self._load_font(font_size)
 
         # 标题过长则换行
         title = title[:self.title_max_chars]
-        lines = self._wrap_text(title, font, w - 120)
+        lines = self._wrap_text(title, font, w - 100)
 
         # 计算文字总高度
         line_heights = []
@@ -234,7 +234,7 @@ class CoverGenerator(BaseModule):
                 line_heights.append(bbox[3] - bbox[1])
             except Exception:
                 line_heights.append(font_size)
-        total_h = sum(line_heights) + 20 * (len(lines) - 1)
+        total_h = sum(line_heights) + 24 * (len(lines) - 1)
 
         # 根据布局计算 y 位置
         if self.layout == "top":
@@ -243,8 +243,8 @@ class CoverGenerator(BaseModule):
             y_start = (h - total_h) // 2
         elif self.layout == "full":
             y_start = (h - total_h) // 2
-        else:  # bottom（默认）
-            y_start = h - total_h - 250
+        else:  # bottom（默认，口播标准）
+            y_start = h - total_h - 280
 
         # 底条颜色：根据主色调生成互补色/同色系
         if dark_bg:
@@ -258,16 +258,25 @@ class CoverGenerator(BaseModule):
             bar_b = max(0, b - 40)
             bar_color = (bar_r, bar_g, bar_b, 160)
 
-        # 半透明底条（增强可读性）
-        overlay = Image.new("RGBA", (w, total_h + 80), bar_color)
+        # 底条：底部渐变遮罩（从透明到深色，让标题区与画面自然融合）
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        # 底部渐变区（标题上方开始到底部）
+        grad_top = max(0, y_start - 60)
+        grad_h = h - grad_top
+        for yy in range(grad_h):
+            ratio = yy / grad_h
+            # 从半透明到较深（alpha 0→170）
+            alpha = int(170 * ratio * ratio)
+            overlay_draw.line([(0, grad_top + yy), (w, grad_top + yy)], fill=(0, 0, 0, alpha))
         img_rgba = img.convert("RGBA")
-        img_rgba.paste(overlay, (0, y_start - 30), overlay)
+        img_rgba = Image.alpha_composite(img_rgba, overlay)
         img = img_rgba.convert("RGB")
         draw = ImageDraw.Draw(img)
 
         y = y_start
 
-        # 绘制文字（带描边 + 关键词高亮）
+        # 绘制文字（加粗描边 outline=4 + 关键词黄色高亮）
         for i, line in enumerate(lines):
             try:
                 bbox = draw.textbbox((0, 0), line, font=font)
@@ -275,27 +284,55 @@ class CoverGenerator(BaseModule):
             except Exception:
                 tw = len(line) * font_size
             x = (w - tw) // 2
-            # 描边（黑色，4 方向）
-            for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, 2), (-2, 2), (2, -2)]:
+            # 描边（黑色，8方向更粗，outline=4）
+            for dx, dy in [(-3,0),(3,0),(0,-3),(0,3),(-3,-3),(3,3),(-3,3),(3,-3),(-2,-2),(2,2)]:
                 draw.text((x + dx, y + dy), line, fill=(0, 0, 0), font=font)
-            # 主文字（白色）
-            draw.text((x, y), line, fill=(255, 255, 255), font=font)
-            y += line_heights[i] + 20
+            # 主文字：关键词（数字/感叹号附近的词）用黄色高亮，其余白色
+            self._draw_title_with_highlight(draw, x, y, line, font)
+            y += line_heights[i] + 24
 
-        # 底部品牌标识（可配置）
-        footer_font = self._load_font(36)
-        footer = self.brand_name
-        try:
-            bbox = draw.textbbox((0, 0), footer, font=footer_font)
-            fw = bbox[2] - bbox[0]
-        except Exception:
-            fw = 200
-        draw.text(
-            ((w - fw) // 2, h - 80), footer,
-            fill=(200, 210, 230), font=footer_font,
-        )
+        # 品牌水印（默认关闭，商业视频不需要；可通过 show_brand 开启）
+        if self.config.get("cover.show_brand", False):
+            footer_font = self._load_font(36)
+            footer = self.brand_name
+            try:
+                bbox = draw.textbbox((0, 0), footer, font=footer_font)
+                fw = bbox[2] - bbox[0]
+            except Exception:
+                fw = 200
+            draw.text(
+                ((w - fw) // 2, h - 80), footer,
+                fill=(200, 210, 230), font=footer_font,
+            )
 
         return img
+
+    def _draw_title_with_highlight(
+        self, draw: ImageDraw.ImageDraw, x: int, y: int,
+        line: str, font,
+    ) -> None:
+        """绘制带关键词高亮的标题（数字/感叹词用黄色，其余白色）
+
+        对标抖音爆款封面：关键数字、感叹句用醒目黄色抓眼球。
+        """
+        import re
+        YELLOW = (255, 230, 0)   # 抖音爆款黄
+        WHITE = (255, 255, 255)
+
+        # 按数字/百分比/感叹号片段切分，含数字的标黄
+        parts = re.split(r'(\d+(?:\.\d+)?[%％]?|!+|！+)', line)
+        cx = x
+        for part in parts:
+            if not part:
+                continue
+            color = YELLOW if re.match(r'^\d|!|！', part) else WHITE
+            try:
+                draw.text((cx, y), part, fill=color, font=font)
+                bbox = draw.textbbox((0, 0), part, font=font)
+                cx += bbox[2] - bbox[0]
+            except Exception:
+                draw.text((cx, y), part, fill=color, font=font)
+                cx += len(part) * (font.size // 2)
 
     def _wrap_text(self, text: str, font, max_width: int) -> list[str]:
         """文字换行"""
@@ -319,18 +356,32 @@ class CoverGenerator(BaseModule):
         return lines if lines else [text]
 
     def _load_font(self, size: int) -> ImageFont.ImageFont:
-        """加载字体"""
+        """加载字体（跨平台，优先粗体中文）"""
         if self.font_path and Path(self.font_path).exists():
             try:
                 return ImageFont.truetype(self.font_path, size)
             except Exception:
                 pass
-        # 尝试系统字体
-        for candidate in [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        # 跨平台候选字体（粗体中文优先，封面标题需要醒目）
+        import platform
+        candidates = []
+        if platform.system() == "Windows":
+            candidates = [
+                "C:/Windows/Fonts/msyhbd.ttc",   # 微软雅黑粗体
+                "C:/Windows/Fonts/simhei.ttf",   # 黑体
+                "C:/Windows/Fonts/msyh.ttc",     # 微软雅黑
+            ]
+        elif platform.system() == "Darwin":
+            candidates = [
+                "/System/Library/Fonts/PingFang.ttc",
+                "/Library/Fonts/Songti.ttc",
+            ]
+        candidates += [
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-        ]:
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        for candidate in candidates:
             if Path(candidate).exists():
                 try:
                     return ImageFont.truetype(candidate, size)

@@ -20,6 +20,7 @@ from .core.storage import Storage
 from .modules.avatar_engine import AvatarEngine
 from .modules.broll_engine import BRollEngine
 from .modules.cover_generator import CoverGenerator
+from .modules.originality_checker import OriginalityChecker
 from .modules.publisher import Publisher
 from .modules.script_extractor import ScriptExtractor
 from .modules.script_writer import ScriptWriter
@@ -74,7 +75,7 @@ class KrVoiceAI:
             # 任何配置变更都重建模块，确保引用一致
             # 注意：audio/effects/scene 段影响 video_composer 的 BGM/滤镜/水印/片头片尾，必须包含
             if any(k in change for k in ("llm", "tts", "avatar", "asr", "composer",
-                                          "cover", "publisher", "pipeline",
+                                          "cover", "publisher", "pipeline", "originality",
                                           "audio", "effects", "scene", "subtitle")) or "_reset_all" in change:
                 self._register_all_modules()
                 self.logger.info("模块已按新配置热重建")
@@ -91,6 +92,7 @@ class KrVoiceAI:
         self.modules: dict[str, BaseModule] = {
             "script_extract": ScriptExtractor(ffmpeg=ff),
             "script_write": ScriptWriter(llm_client=llm),
+            "originality_check": OriginalityChecker(llm_client=llm),
             "tts": TTSEngine(gpu_runner=gpu),
             "avatar": AvatarEngine(gpu_runner=gpu, ffmpeg=ff),
             "subtitle": SubtitleEngine(),
@@ -117,12 +119,18 @@ class KrVoiceAI:
             return step_name == "publish" and not ctx.metadata.get("auto_publish")
         def skip_no_broll(ctx):
             return step_name == "broll" and not ctx.broll_clips
+        def skip_originality_disabled(ctx):
+            return step_name == "originality_check" and not (
+                self.config.get("originality.enabled", True)
+            )
         if step_name == "script_extract":
             return skip_no_ref_url
         if step_name == "publish":
             return skip_publish_disabled
         if step_name == "broll":
             return skip_no_broll
+        if step_name == "originality_check":
+            return skip_originality_disabled
         return None
 
     # ============ 任务管理 ============
@@ -293,6 +301,43 @@ class KrVoiceAI:
     def rerun_job(self, job_id: str) -> bool:
         """重跑任务（断点续跑）"""
         return self.orchestrator.run_job(job_id)
+
+    # ============ 批量处理 ============
+
+    def submit_and_run_batch(
+        self,
+        jobs: list[dict],
+        max_workers: int | None = None,
+        progress_callback: Any = None,
+    ) -> dict:
+        """批量并发执行多个任务
+
+        Args:
+            jobs: 任务参数列表，每个元素是 submit_and_run 的 kwargs 字典
+            max_workers: 最大并发数（None 读配置 pipeline.concurrency；
+                         GPU 模式自动降为 1）
+            progress_callback: 进度回调 (index, status, data)
+
+        Returns:
+            {"results": [...], "summary": {...}}
+        """
+        from .pipeline.parallel_runner import ParallelRunner
+        runner = ParallelRunner(self, max_workers=max_workers)
+        results = runner.run_batch(jobs, progress_callback=progress_callback)
+        summary = runner.run_batch_summary(results)
+        return {
+            "results": [
+                {
+                    "index": r.index,
+                    "job_id": r.job_id,
+                    "success": r.success,
+                    "elapsed": r.elapsed,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+            "summary": summary,
+        }
 
     def delete_job(self, job_id: str) -> bool:
         """删除任务"""
