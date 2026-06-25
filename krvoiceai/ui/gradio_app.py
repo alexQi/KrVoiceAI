@@ -196,23 +196,29 @@ def _build_ui() -> "gr.Blocks":
                 info="建议 150-500 字",
             )
             char_count = gr.Markdown("字数：0")
-            extract_status = gr.Textbox(label="提取结果", interactive=False, visible=False)
+            extract_status = gr.Markdown("粘贴链接后点击「提取文案」按钮")
 
-            def _extract_script(url):
-                """从链接提取文案"""
+            def _extract_script(url, progress=gr.Progress(track_tqdm=False)):
+                """从链接提取文案（抖音/快手反爬时自动用分享文本文案）"""
                 if not url or not url.strip():
-                    return None, "⚠️ 请先粘贴链接", "字数：0", gr.update(visible=False)
+                    return None, "⚠️ 请先粘贴链接", "字数：0"
+                progress(0.1, desc="正在解析链接并提取文案（抖音视频可能需 20-40 秒）...")
                 try:
                     app = _get_app()
                     res = app.process_script(script="", action="extract", reference_url=url.strip())
+                    progress(0.9, desc="提取完成")
                     if res.get("success") and res.get("script"):
                         text = res["script"]
-                        return text, f"✅ 提取成功（{len(text)} 字）", f"字数：{len(text)}", gr.update(visible=False)
+                        is_mock = res.get("mock", False)
+                        tag = "（⚠️ 容错降级生成的示例文案，建议手动修改）" if is_mock else ""
+                        return text, f"✅ 提取成功（{len(text)} 字）{tag}", f"字数：{len(text)}"
                     else:
                         err = res.get("error", "未知错误")
-                        return None, f"❌ 提取失败：{err}", "字数：0", gr.update(visible=False)
+                        hint = "\n\n💡 建议：直接在第①步手动输入文案，或粘贴完整抖音分享文本（含文案描述）。"
+                        return None, f"❌ 提取失败：{err}{hint}", "字数：0"
                 except Exception as e:
-                    return None, f"❌ 提取失败：{e}", "字数：0", gr.update(visible=False)
+                    hint = "\n\n💡 建议：直接手动输入文案，或粘贴完整抖音分享文本。"
+                    return None, f"❌ 提取失败：{e}{hint}", "字数：0"
 
             def _count_chars(text):
                 n = len(text) if text else 0
@@ -220,7 +226,7 @@ def _build_ui() -> "gr.Blocks":
 
             extract_btn.click(
                 _extract_script, inputs=[ref_url],
-                outputs=[script_input, extract_status, char_count, extract_status],
+                outputs=[script_input, extract_status, char_count],
             )
             script_input.change(_count_chars, inputs=[script_input], outputs=[char_count])
 
@@ -253,7 +259,7 @@ def _build_ui() -> "gr.Blocks":
                 lines=6,
                 placeholder="点击「AI 优化文案」生成，或直接在此输入最终文案...",
             )
-            opt_info = gr.Textbox(label="优化信息", interactive=False, visible=False)
+            opt_info = gr.Markdown("优化后的文案会显示在此，可直接编辑")
 
             with gr.Row():
                 preview_voice = gr.Dropdown(
@@ -261,42 +267,45 @@ def _build_ui() -> "gr.Blocks":
                     allow_custom_value=True, scale=3,
                 )
                 preview_btn = gr.Button("🔊 试听这段文案", variant="secondary", scale=2)
-            preview_audio = gr.Audio(label="试听结果", type="filepath", visible=False)
+            preview_audio = gr.Audio(label="试听结果", type="filepath")
 
-            def _optimize(text, mode, style):
+            def _optimize(text, mode, style, progress=gr.Progress(track_tqdm=False)):
                 """AI 优化文案"""
                 if not text or not text.strip():
-                    return None, "⚠️ 请先在第①步输入文案", gr.update(visible=False), f"字数：0"
+                    return None, "⚠️ 请先在第①步输入文案", f"字数：0"
+                progress(0.2, desc="AI 正在优化文案...")
                 try:
                     app = _get_app()
-                    # process_script 的 action 需映射：polish/rewrite/generate 直接用，style 通过 style 参数
                     action = mode
                     res = app.process_script(script=text, action=action, style=style)
+                    progress(0.9, desc="优化完成")
                     if res.get("success") and res.get("script"):
                         opt_text = res["script"]
-                        return opt_text, f"✅ 优化完成（{len(opt_text)} 字，模式={action}）", gr.update(visible=False), f"字数：{len(opt_text)}"
+                        return opt_text, f"✅ 优化完成（{len(opt_text)} 字，模式={action}）", f"字数：{len(opt_text)}"
                     else:
-                        return None, f"❌ 优化失败：{res.get('error', '未知错误')}", gr.update(visible=False), "字数：0"
+                        return None, f"❌ 优化失败：{res.get('error', '未知错误')}", "字数：0"
                 except Exception as e:
-                    return None, f"❌ 优化失败：{e}", gr.update(visible=False), "字数：0"
+                    return None, f"❌ 优化失败：{e}", "字数：0"
 
-            def _preview(text, voice):
+            def _preview(text, voice, progress=gr.Progress(track_tqdm=False)):
                 """试听文案合成"""
                 if not text or not text.strip():
-                    return None, "⚠️ 请先输入文案", gr.update(visible=False)
+                    return None, "⚠️ 请先输入优化后文案"
+                progress(0.3, desc="正在合成语音试听（CPU 合成，稍候）...")
                 try:
                     app = _get_app()
                     res = app.preview_tts(text, voice)
+                    progress(0.95, desc="合成完成")
                     if res["success"]:
-                        return res["audio_path"], f"✅ 试听成功（{res['duration']}s）", gr.update(visible=True)
+                        return res["audio_path"], f"✅ 试听成功（{res['duration']}s）"
                     else:
-                        return None, f"❌ 试听失败：{res.get('error')}", gr.update(visible=True)
+                        return None, f"❌ 试听失败：{res.get('error')}"
                 except Exception as e:
-                    return None, f"❌ 试听失败：{e}", gr.update(visible=True)
+                    return None, f"❌ 试听失败：{e}"
 
             optimize_btn.click(
                 _optimize, inputs=[script_input, opt_mode, opt_style],
-                outputs=[script_optimized, opt_info, opt_info, char_count],
+                outputs=[script_optimized, opt_info, char_count],
             )
             # 优化后文案改写回 script_input（让用户继续编辑/检测）
             script_optimized.change(
@@ -305,7 +314,7 @@ def _build_ui() -> "gr.Blocks":
             )
             preview_btn.click(
                 _preview, inputs=[script_optimized, preview_voice],
-                outputs=[preview_audio, opt_info, preview_audio],
+                outputs=[preview_audio, opt_info],
             )
 
         # ============================================================
@@ -730,7 +739,8 @@ def launch(host: str = "0.0.0.0", port: int = 7860, share: bool = False) -> None
     demo = _build_ui()
     logger = get_logger()
     logger.info(f"启动 Gradio 服务: http://{host}:{port}")
-    demo.queue().launch(server_name=host, server_port=port, share=share,
+    demo.queue(default_concurrency_limit=5, max_size=20).launch(
+                        server_name=host, server_port=port, share=share,
                         inbrowser=True, show_error=True,
                         css=CUSTOM_CSS, theme=gr.themes.Soft())
 

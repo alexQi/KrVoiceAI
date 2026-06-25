@@ -153,15 +153,31 @@ class ScriptExtractor(BaseModule):
                     try:
                         text = self._extract_real(video_url, Path(tmp))
                     except Exception as e:
-                        self.logger.warning(f"视频提取失败，尝试文章提取: {e}")
-                        # 视频提取失败，尝试作为文章提取
-                        try:
-                            text = self._extract_article(video_url)
-                        except Exception as e2:
-                            self.logger.warning(f"文章提取也失败，降级到 mock: {e2}")
-                            text = self._extract_mock(video_url)
+                        self.logger.warning(f"视频音频下载/转写失败: {e}")
+                        # 抖音/快手强力反爬常导致下载失败，优先用分享文本里的文案描述
+                        desc = self._extract_desc_from_share_text(video_url if False else cleaned_input)
+                        if desc:
+                            self.logger.info(f"已从分享文本提取文案描述: {len(desc)} 字")
+                            text = desc
+                        else:
+                            # 没有分享文案，尝试文章提取
+                            try:
+                                text = self._extract_article(video_url)
+                            except Exception as e2:
+                                self.logger.warning(f"文章提取也失败: {e2}")
+                                raise RuntimeError(
+                                    f"无法下载视频音频（{str(e)[:80]}），"
+                                    f"且分享文本中无文案描述。请直接在第①步手动输入文案，"
+                                    f"或粘贴抖音分享文本（含文案描述）。"
+                                )
             else:
-                text = self._extract_mock(video_url)
+                # yt-dlp 或 ASR 不可用：优先用分享文案描述，再降级 mock
+                desc = self._extract_desc_from_share_text(cleaned_input)
+                if desc:
+                    self.logger.info(f"yt-dlp/ASR 不可用，使用分享文本文案描述: {len(desc)} 字")
+                    text = desc
+                else:
+                    text = self._extract_mock(video_url)
         else:
             # 文章链接：直接抓取网页正文
             try:
@@ -338,6 +354,45 @@ class ScriptExtractor(BaseModule):
             return "https://" + matches[0].rstrip(",.;!?，。；！？、）)】]")
         return ""
 
+    @staticmethod
+    def _extract_desc_from_share_text(text: str) -> str:
+        """从抖音/快手分享文本中提取视频文案描述（最可靠，无需下载）
+
+        抖音分享格式：
+        "1.25 复制打开抖音，看看【风芒新闻的作品】深圳一三甲医院涉嫌伪造病历... https://v.douyin.com/xxx/"
+
+        快手/B站分享也含描述。这是最可靠的方式，因为抖音/快手有强力反爬，
+        yt-dlp 经常因 cookie 问题无法下载。返回空串表示未提取到。
+        """
+        if not text:
+            return ""
+        text = text.strip()
+        # 抖音：【作者的作品】文案内容 https://...
+        m = re.search(r"看看【(.+?)】(.+?)(?:\s+https?://|$)", text)
+        if m:
+            desc = m.group(2).strip()
+            # 去掉末尾省略号或标点
+            desc = desc.rstrip("….;；，,。 \n")
+            if len(desc) >= 4:
+                return desc
+        # 快手：复制打开快手...文案 https://...
+        m = re.search(r"复制打开快[手眼][，,]?\s*(.+?)(?:\s+https?://|$)", text)
+        if m:
+            desc = m.group(1).strip().rstrip("….;；，,。 \n")
+            if len(desc) >= 4:
+                return desc
+        # 通用：URL 之前的中文描述（去掉前缀"复制打开xxx"）
+        url_pos = text.find("http")
+        if url_pos > 10:
+            prefix = text[:url_pos].strip()
+            # 去掉常见的分享前缀
+            prefix = re.sub(r"^[\d.]+\s*复制打开[^，,]*[，,]?\s*", "", prefix)
+            prefix = re.sub(r"^看看【[^】]*】\s*", "", prefix)
+            prefix = prefix.strip().rstrip("….;； \n")
+            if len(prefix) >= 4:
+                return prefix
+        return ""
+
     def _extract_real(self, url: str, work_dir: Path) -> str:
         """真实提取：yt-dlp 下载 + ASR 转写（支持 MiMo / FunASR / whisper_local）"""
         self.logger.info(f"下载视频音频: {url}")
@@ -388,6 +443,10 @@ class ScriptExtractor(BaseModule):
                 "noplaylist": True,
                 "quiet": True,
                 "no_warnings": True,
+                "http_headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": "https://www.douyin.com/",
+                },
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
