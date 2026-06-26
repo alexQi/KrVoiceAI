@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
   <title>KrVoiceAI · 虚拟人口播智能体</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260626b">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260626c">
+  <script src="https://unpkg.com/lucide@latest"></script>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
   <!-- 移动端点击修复（内联确保优先级，避免外部CSS缓存导致失效） -->
   <style>
@@ -102,68 +103,68 @@
         <div class="nav-section">
           <div class="nav-label">开始</div>
           <button class="nav-item active" id="nav-dashboard">
-            <span class="nav-icon">🏠</span><span>首页</span>
+            <span class="nav-icon"><i data-lucide="home"></i></span><span>首页</span>
           </button>
         </div>
 
         <div class="nav-section">
           <div class="nav-label">创作</div>
           <button class="nav-item" id="nav-wizard">
-            <span class="nav-icon">🧙</span><span>创作向导</span>
+            <span class="nav-icon"><i data-lucide="wand-2"></i></span><span>创作向导</span>
           </button>
           <button class="nav-item" id="nav-generate">
-            <span class="nav-icon">🚀</span><span>一键生成</span>
+            <span class="nav-icon"><i data-lucide="rocket"></i></span><span>一键生成</span>
           </button>
           <button class="nav-item" id="nav-script">
-            <span class="nav-icon">✍️</span><span>文案工作台</span>
+            <span class="nav-icon"><i data-lucide="pen-line"></i></span><span>文案工作台</span>
           </button>
           <button class="nav-item" id="nav-step-by-step">
-            <span class="nav-icon">🔧</span><span>分步创作</span>
+            <span class="nav-icon"><i data-lucide="wrench"></i></span><span>分步创作</span>
           </button>
           <button class="nav-item" id="nav-batch">
-            <span class="nav-icon">📦</span><span>批量处理</span>
+            <span class="nav-icon"><i data-lucide="package"></i></span><span>批量处理</span>
           </button>
           <button class="nav-item" id="nav-timeline">
-            <span class="nav-icon">🎞️</span><span>时间轴剪辑</span>
+            <span class="nav-icon"><i data-lucide="film"></i></span><span>时间轴剪辑</span>
           </button>
         </div>
 
         <div class="nav-section">
           <div class="nav-label">资源</div>
           <button class="nav-item" id="nav-avatars">
-            <span class="nav-icon">👤</span><span>形象管理</span>
+            <span class="nav-icon"><i data-lucide="user-round"></i></span><span>形象管理</span>
           </button>
           <button class="nav-item" id="nav-voices">
-            <span class="nav-icon">🎙️</span><span>音色管理</span>
+            <span class="nav-icon"><i data-lucide="mic"></i></span><span>音色管理</span>
           </button>
           <button class="nav-item" id="nav-templates">
-            <span class="nav-icon">🎨</span><span>模板中心</span>
+            <span class="nav-icon"><i data-lucide="palette"></i></span><span>模板中心</span>
           </button>
           <button class="nav-item" id="nav-jobs">
-            <span class="nav-icon">📋</span><span>任务管理</span>
+            <span class="nav-icon"><i data-lucide="clipboard-list"></i></span><span>任务管理</span>
           </button>
         </div>
 
         <div class="nav-section">
           <div class="nav-label">设置</div>
           <button class="nav-item" id="nav-settings-models">
-            <span class="nav-icon">🧠</span><span>模型配置</span>
+            <span class="nav-icon"><i data-lucide="brain-circuit"></i></span><span>模型配置</span>
           </button>
           <button class="nav-item" id="nav-settings-video">
-            <span class="nav-icon">🎬</span><span>视频设置</span>
+            <span class="nav-icon"><i data-lucide="video"></i></span><span>视频设置</span>
           </button>
           <button class="nav-item" id="nav-settings-scene">
-            <span class="nav-icon">✨</span><span>场景与效果</span>
+            <span class="nav-icon"><i data-lucide="sparkles"></i></span><span>场景与效果</span>
           </button>
           <button class="nav-item" id="nav-settings-publish">
-            <span class="nav-icon">📤</span><span>发布设置</span>
+            <span class="nav-icon"><i data-lucide="share-2"></i></span><span>发布设置</span>
           </button>
         </div>
 
         <div class="nav-section">
           <div class="nav-label">系统</div>
           <button class="nav-item" id="nav-health">
-            <span class="nav-icon">⚙️</span><span>系统状态</span>
+            <span class="nav-icon"><i data-lucide="activity"></i></span><span>系统状态</span>
           </button>
         </div>
       </nav>
@@ -463,22 +464,8 @@
                 </div>
               </div>
               <button class="btn btn-primary" id="wiz-extract-btn" type="button">🔗 提取文案</button>
-              <div class="cookies-config" id="wiz-cookies-config">
-                <div class="cookies-header">
-                  <span class="cookies-title">🍪 抖音/快手 Cookies</span>
-                  <span class="cookies-status" id="wiz-cookies-status">检查中…</span>
-                </div>
-                <div class="cookies-actions">
-                  <label class="btn btn-secondary btn-sm cookies-upload-btn">
-                    📁 上传 cookies.txt
-                    <input type="file" id="wiz-cookies-file" accept=".txt,text/plain" hidden>
-                  </label>
-                  <button class="btn btn-ghost btn-sm" id="wiz-cookies-delete" type="button" style="display:none">🗑️ 删除</button>
-                </div>
-                <div class="cookies-hint" id="wiz-cookies-hint">
-                  抖音/快手反爬严格，未配置 cookies 常导致 "Fresh cookies needed" 下载失败。
-                  用浏览器插件（EditThisCookie / Get cookies.txt）登录 douyin.com 后导出 cookies.txt（Netscape 格式）。
-                </div>
+              <div class="extract-tip" id="wiz-extract-tip">
+                粘贴抖音/快手/B站分享文本，系统自动提取文案（含字幕转写，无需任何配置）
               </div>
             </div>
           </div>
@@ -2234,23 +2221,23 @@
     <!-- ========== 移动端底部导航栏（拇指区） ========== -->
     <nav class="bottom-nav">
       <button class="bottom-nav-item active" data-page="dashboard">
-        <span class="bottom-nav-icon">🏠</span>
+        <span class="bottom-nav-icon"><i data-lucide="home"></i></span>
         <span class="bottom-nav-label">首页</span>
       </button>
       <button class="bottom-nav-item" data-page="wizard">
-        <span class="bottom-nav-icon">🧙</span>
+        <span class="bottom-nav-icon"><i data-lucide="wand-2"></i></span>
         <span class="bottom-nav-label">创作</span>
       </button>
       <button class="bottom-nav-item" data-page="templates">
-        <span class="bottom-nav-icon">🎨</span>
+        <span class="bottom-nav-icon"><i data-lucide="palette"></i></span>
         <span class="bottom-nav-label">模板</span>
       </button>
       <button class="bottom-nav-item" data-page="jobs">
-        <span class="bottom-nav-icon">📋</span>
+        <span class="bottom-nav-icon"><i data-lucide="clipboard-list"></i></span>
         <span class="bottom-nav-label">任务</span>
       </button>
       <button class="bottom-nav-item" data-page="settings-models">
-        <span class="bottom-nav-icon">⚙️</span>
+        <span class="bottom-nav-icon"><i data-lucide="settings"></i></span>
         <span class="bottom-nav-label">设置</span>
       </button>
     </nav>
@@ -2281,7 +2268,7 @@
   <!-- Toast 容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260626b"></script>
+  <script src="/static/js/app.js?v=20260626c"></script>
   <script src="/static/js/settings.js?v=20260621d"></script>
 </body>
 </html>

@@ -134,9 +134,12 @@ asr:
   # 本地运行时模型缓存目录
   model_cache: ./workspace_data/models/asr
   language: zh
-  # 文案提取：yt-dlp 下载视频用的 cookies 文件（Netscape 格式 .txt）
-  # 抖音/快手强力反爬，未配置 cookies 常导致下载失败（Fresh cookies needed）
-  # 从浏览器导出：用 EditThisCookie / Get cookies.txt 等插件导出 douyin.com 的 cookies
+  # 文案提取：yt-dlp 自动从本机浏览器读取 cookies（用户无感知，无需手动上传）
+  # 抖音/快手强力反爬，yt-dlp 需 cookies 才能下载。设置后自动从已登录浏览器读取。
+  # 支持值：chrome / edge / firefox / brave / opera / safari / chromium / "" (禁用)
+  # 前提：用户在本机浏览器登录过 douyin.com 即可，yt-dlp 自动提取 cookies
+  cookies_from_browser: "chrome"
+  # cookies 文件路径（Netscape 格式 .txt，手动指定，优先级低于 cookies_from_browser）
   cookies_file: ""
   # MiMo ASR 配置（provider=mimo 时使用）
   api_base: https://token-plan-cn.xiaomimimo.com/v1

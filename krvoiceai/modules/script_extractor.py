@@ -69,6 +69,9 @@ class ScriptExtractor(BaseModule):
         self.timeout = self.config.get("asr.timeout", 120)
         # yt-dlp cookies 文件路径（抖音/快手反爬必需，Netscape 格式 .txt）
         self.cookies_file = self.config.get("asr.cookies_file", "")
+        # yt-dlp 自动从本机浏览器读取 cookies（用户无感知，无需手动上传）
+        # 支持 chrome/edge/firefox 等，优先级高于 cookies_file
+        self.cookies_from_browser = self.config.get("asr.cookies_from_browser", "")
 
     def setup(self) -> None:
         # yt-dlp 检测：优先命令行，其次 Python 模块
@@ -165,7 +168,15 @@ class ScriptExtractor(BaseModule):
         is_video = self._is_video_url(video_url)
 
         if is_video:
-            # 视频链接：yt-dlp + ASR
+            # === 优先：网页抓取（轻量，无需下载视频/无需用户上传 cookies/无需 ASR）===
+            # 抖音/快手/B站分享页内嵌 JSON，含完整 desc 和字幕 URL
+            # 90% 口播视频有自动字幕 → 下载字幕 SRT 即可提取完整文案（秒级，抗反爬）
+            web_text = self._extract_from_web_page(video_url, cleaned_input)
+            if web_text:
+                self.logger.info(f"网页抓取成功，文案 {len(web_text)} 字")
+                return self._clean_text(web_text)
+
+            # 网页抓取失败 → yt-dlp + ASR（重型兜底，cookies 服务端自动获取）
             use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo", "whisper_local")
             if use_real:
                 import tempfile
@@ -174,30 +185,28 @@ class ScriptExtractor(BaseModule):
                         text = self._extract_real(video_url, Path(tmp))
                     except Exception as e:
                         self.logger.warning(f"视频音频下载/转写失败: {e}")
-                        # 抖音/快手强力反爬常导致下载失败，优先用分享文本里的文案描述
-                        desc = self._extract_desc_from_share_text(video_url if False else cleaned_input)
+                        # 兜底：分享文本里的文案描述
+                        desc = self._extract_desc_from_share_text(cleaned_input)
                         if desc:
                             self.logger.info(f"已从分享文本提取文案描述: {len(desc)} 字")
                             text = desc
-                            self._last_extract_degraded = True  # 标记降级（非真实 ASR 转写）
+                            self._last_extract_degraded = True
                         else:
-                            # 没有分享文案，尝试文章提取
                             try:
                                 text = self._extract_article(video_url)
                             except Exception as e2:
                                 self.logger.warning(f"文章提取也失败: {e2}")
                                 raise RuntimeError(
-                                    f"无法下载视频音频（{str(e)[:80]}），"
-                                    f"且分享文本中无文案描述。请直接在第①步手动输入文案，"
-                                    f"或粘贴抖音分享文本（含文案描述）。"
+                                    f"无法提取文案（网页抓取与视频下载均失败）。"
+                                    f"请直接在第①步手动输入文案，或粘贴抖音分享文本。"
                                 )
             else:
-                # yt-dlp 或 ASR 不可用：优先用分享文案描述，再降级 mock
+                # yt-dlp 或 ASR 不可用：用分享文案描述兜底
                 desc = self._extract_desc_from_share_text(cleaned_input)
                 if desc:
                     self.logger.info(f"yt-dlp/ASR 不可用，使用分享文本文案描述: {len(desc)} 字")
                     text = desc
-                    self._last_extract_degraded = True  # 标记降级（非真实 ASR 转写）
+                    self._last_extract_degraded = True
                 else:
                     text = self._extract_mock(video_url)
         else:
@@ -454,51 +463,365 @@ class ScriptExtractor(BaseModule):
         else:
             return self._transcribe_funasr(audio_path)
 
+    # ============ 网页抓取（轻量，无需下载视频/无需用户上传 cookies）============
+
+    # 真实浏览器 UA（避免被识别为爬虫）
+    _BROWSER_UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
+
+    def _extract_from_web_page(self, url: str, share_text: str = "") -> str:
+        """从视频分享页抓取文案（业界主流轻量方案，用户无感知）
+
+        降级链路（全部服务端自动，无需用户介入）：
+        1. httpx.get 短链 → 跟随重定向 → 获取分享页 HTML
+        2. 解析内嵌 JSON 提取 desc（完整文案描述）和 subtitle URL
+        3. 优先下载字幕 SRT → 提取完整文案（抖音自动字幕，准确率高）
+        4. desc 足够长（≥20字）→ 直接用 desc
+        5. 全部失败返回 ""，交给上层 yt-dlp 兜底
+
+        Args:
+            url: 视频 URL（已清洗）
+            share_text: 用户粘贴的原始分享文本（含描述，作为兜底）
+        Returns:
+            提取的文案文本，失败返回 ""
+        """
+        try:
+            if "douyin.com" in url or "iesdouyin" in url:
+                return self._fetch_douyin_share(url, share_text)
+            if "kuaishou.com" in url:
+                return self._fetch_kuaishou_share(url, share_text)
+            if "bilibili.com" in url or "b23.tv" in url:
+                return self._fetch_bilibili_share(url, share_text)
+        except Exception as e:
+            self.logger.warning(f"网页抓取失败 ({url[:60]}): {e}")
+        return ""
+
+    def _fetch_douyin_share(self, url: str, share_text: str = "") -> str:
+        """抖音分享页抓取：解析内嵌 JSON 拿 desc + 字幕 URL
+
+        抖音短链 v.douyin.com/xxx → 302 重定向到 www.iesdouyin.com/share/video/{aweme_id}
+        注意：直接 follow_redirects 会被抖音 RST（WinError 10054），需手动解析 Location。
+        抖音分享页有 JS 挑战，纯 httpx 可能拿不到完整 JSON，降级到 desc 兜底。
+        """
+        headers = {
+            "User-Agent": self._BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://www.douyin.com/",
+        }
+        # 步骤1：不跟随重定向，手动解析 Location 拿 aweme_id（避免短链 RST）
+        aweme_id = ""
+        try:
+            r = httpx.get(url, headers=headers, timeout=15, follow_redirects=False)
+            if r.status_code in (301, 302, 303, 307, 308):
+                loc = r.headers.get("location", "")
+                am = re.search(r"/video/(\d+)", loc)
+                if am:
+                    aweme_id = am.group(1)
+        except Exception as e:
+            self.logger.debug(f"抖音短链解析失败: {e}")
+
+        # 步骤2：用 aweme_id 访问 iesdouyin 分享页（可能有 JS 挑战，但不会 RST）
+        html = ""
+        if aweme_id:
+            try:
+                share_url = f"https://www.iesdouyin.com/share/video/{aweme_id}/"
+                r2 = httpx.get(share_url, headers=headers, timeout=15, follow_redirects=True)
+                html = r2.text
+            except Exception as e:
+                self.logger.debug(f"iesdouyin 分享页获取失败: {e}")
+
+        # 步骤3：解析内嵌 JSON
+        desc, subtitle_url, _ = self._parse_douyin_html(html) if html else ("", "", "")
+
+        # 优先：下载字幕 SRT（最准确，抖音官方转写）
+        if subtitle_url:
+            sub_text = self._download_subtitle(subtitle_url, headers)
+            if sub_text and len(sub_text) >= 10:
+                self.logger.info(f"抖音字幕提取成功: {len(sub_text)} 字")
+                return sub_text
+
+        # 次选：desc 完整文案（视频描述/标题，口播视频常含完整文案）
+        if desc and len(desc) >= 20:
+            self.logger.info(f"抖音 desc 提取成功: {len(desc)} 字")
+            return desc
+
+        # 注：不在此处做分享文本兜底，留给上层 yt-dlp 失败后再降级
+        # 这样 yt-dlp + 浏览器 cookies 有机会下载完整视频做 ASR 转写
+        return ""
+
+    def _parse_douyin_html(self, html: str) -> tuple[str, str, str]:
+        """从抖音分享页 HTML 解析 desc 和字幕 URL
+
+        抖音分享页内嵌 JSON 有两种位置：
+        1. <script id="RENDER_DATA" type="application/json">{URL编码的JSON}</script>
+        2. window._ROUTER_DATA = {JSON}
+        3. 直接 aweme_id 在 URL 或 meta 中
+        Returns: (desc, subtitle_url, aweme_id)
+        """
+        desc, subtitle_url, aweme_id = "", "", ""
+
+        # 方式1：RENDER_DATA（URL编码）
+        m = re.search(r'id="RENDER_DATA"[^>]*>([^<]+)</script>', html)
+        if m:
+            try:
+                from urllib.parse import unquote
+                data = unquote(m.group(1))
+                # 提取 desc
+                dm = re.search(r'"desc"\s*:\s*"((?:[^"\\]|\\.)*)"', data)
+                if dm:
+                    desc = dm.group(1).encode().decode("unicode_escape", errors="ignore")
+                # 提取字幕 URL
+                sm = re.search(r'"subtitle"\s*:\s*\{[^}]*"url"\s*:\s*"((?:[^"\\]|\\.)*)"', data)
+                if sm:
+                    subtitle_url = sm.group(1).encode().decode("unicode_escape", errors="ignore")
+                # 提取 aweme_id
+                am = re.search(r'"aweme_id"\s*:\s*"(\d+)"', data)
+                if am:
+                    aweme_id = am.group(1)
+            except Exception as e:
+                self.logger.debug(f"解析 RENDER_DATA 失败: {e}")
+
+        # 方式2：window._ROUTER_DATA
+        if not desc:
+            m = re.search(r'_ROUTER_DATA\s*=\s*(\{.+?\})\s*</script>', html, re.DOTALL)
+            if m:
+                try:
+                    import json as _json
+                    data = _json.loads(m.group(1))
+                    # 嵌套结构 loaderData.video_{id}.videoInfo
+                    for v in data.get("loaderData", {}).values():
+                        info = v.get("videoInfo") or v
+                        if isinstance(info, dict):
+                            if not desc and info.get("desc"):
+                                desc = info["desc"]
+                            sub = info.get("subtitle") or {}
+                            if isinstance(sub, dict) and sub.get("url") and not subtitle_url:
+                                subtitle_url = sub["url"]
+                            if info.get("aweme_id") and not aweme_id:
+                                aweme_id = info["aweme_id"]
+                            if desc:
+                                break
+                except Exception as e:
+                    self.logger.debug(f"解析 _ROUTER_DATA 失败: {e}")
+
+        # 方式3：meta og:title 兜底拿 desc
+        if not desc:
+            tm = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', html)
+            if tm:
+                desc = tm.group(1).strip()
+
+        # 清理 desc 末尾的分享后缀
+        if desc:
+            desc = re.sub(r"\s*#[^#]+$", "", desc).strip()  # 去话题标签
+            desc = desc.rstrip("….").strip()
+        return desc, subtitle_url, aweme_id
+
+    def _fetch_kuaishou_share(self, url: str, share_text: str = "") -> str:
+        """快手分享页抓取"""
+        headers = {
+            "User-Agent": self._BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://www.kuaishou.com/",
+        }
+        r = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+        html = r.text
+        # 快手 meta og:description
+        m = re.search(r'<meta[^>]+name="description"[^>]+content="([^"]+)"', html)
+        if m and len(m.group(1)) >= 20:
+            return m.group(1).strip()
+        if share_text:
+            return self._extract_desc_from_share_text(share_text) or ""
+        return ""
+
+    def _fetch_bilibili_share(self, url: str, share_text: str = "") -> str:
+        """B站分享页抓取：B站有开放 API 可拿字幕"""
+        headers = {
+            "User-Agent": self._BROWSER_UA,
+            "Accept": "application/json",
+            "Referer": "https://www.bilibili.com/",
+        }
+        # 解析 BV 号
+        bvm = re.search(r"(BV[\w]+)", url)
+        if bvm:
+            bvid = bvm.group(1)
+            try:
+                # B站 web API 获取视频信息
+                info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+                r = httpx.get(info_url, headers=headers, timeout=15)
+                data = r.json()
+                desc = data.get("data", {}).get("desc", "")
+                if desc and len(desc) >= 20:
+                    self.logger.info(f"B站 desc 提取: {len(desc)} 字")
+                    return desc
+                # 尝试获取字幕
+                cid = data.get("data", {}).get("cid")
+                if cid:
+                    sub_text = self._fetch_bilibili_subtitle(cid, headers)
+                    if sub_text:
+                        return sub_text
+            except Exception as e:
+                self.logger.debug(f"B站 API 失败: {e}")
+        # 兜底：分享文本
+        if share_text:
+            return self._extract_desc_from_share_text(share_text) or ""
+        return ""
+
+    def _fetch_bilibili_subtitle(self, cid: str, headers: dict) -> str:
+        """获取 B站字幕（subtitle API）"""
+        try:
+            sub_url = f"https://api.bilibili.com/x/player/v2?cid={cid}"
+            r = httpx.get(sub_url, headers=headers, timeout=15)
+            data = r.json()
+            subtitles = data.get("data", {}).get("subtitle", {}).get("subtitles", [])
+            for sub in subtitles:
+                url = sub.get("subtitle_url", "")
+                if url:
+                    if url.startswith("//"):
+                        url = "https:" + url
+                    return self._download_subtitle(url, headers)
+        except Exception as e:
+            self.logger.debug(f"B站字幕获取失败: {e}")
+        return ""
+
+    def _download_subtitle(self, url: str, headers: dict) -> str:
+        """下载字幕文件（SRT/JSON/VTT）并提取纯文本
+
+        抖音字幕常为 JSON 格式：[{"text": "...", "start": ...}, ...]
+        B站字幕为 JSON：{"body": [{"content": "...", "from": ...}, ...]}
+        通用 SRT：1\\n00:00:01,000 --> 00:00:03,000\\n文本\\n
+        """
+        try:
+            r = httpx.get(url, headers=headers, timeout=20, follow_redirects=True)
+            content = r.text.strip()
+            if not content:
+                return ""
+            # JSON 数组格式（抖音常见）
+            if content.startswith("[") or content.startswith("{"):
+                try:
+                    import json as _json
+                    data = _json.loads(content)
+                    parts = []
+                    if isinstance(data, list):
+                        for item in data:
+                            t = item.get("text") or item.get("content") or ""
+                            if t:
+                                parts.append(t)
+                    elif isinstance(data, dict):
+                        body = data.get("body", data)
+                        if isinstance(body, list):
+                            for item in body:
+                                t = item.get("text") or item.get("content") or ""
+                                if t:
+                                    parts.append(t)
+                    text = "".join(parts).strip()
+                    if text:
+                        return text
+                except Exception:
+                    pass
+            # SRT/VTT 格式
+            lines = content.split("\n")
+            texts = []
+            for line in lines:
+                line = line.strip()
+                # 跳过序号、时间轴、空行
+                if not line or line.isdigit() or "-->" in line or line.startswith("WEBVTT"):
+                    continue
+                texts.append(line)
+            return " ".join(texts).strip()
+        except Exception as e:
+            self.logger.debug(f"字幕下载失败: {e}")
+            return ""
+
     def _ytdlp_download_audio(self, url: str, output_template: str) -> Optional[Path]:
         """用 yt-dlp 下载音频，返回下载的文件路径
 
-        优先使用 Python API（yt_dlp.YoutubeDL），失败则回退命令行。
-        若配置了 asr.cookies_file 且文件存在，自动传入 cookies 绕过抖音/快手反爬。
+        cookies 自动获取（用户无感知），多浏览器自动回退：
+        - 优先 cookies_from_browser 配置的浏览器，失败自动尝试其他浏览器
+        - Chrome 运行时会锁定 cookies 数据库（yt-dlp #7271），自动回退到 edge/firefox
+        - 其次 cookies_file：手动指定的 Netscape 格式文件
         """
-        # 检查 cookies 文件是否可用
         cookies_path = Path(self.cookies_file) if self.cookies_file else None
-        use_cookies = bool(cookies_path and cookies_path.exists() and cookies_path.is_file())
-        if use_cookies:
-            self.logger.info(f"yt-dlp 使用 cookies: {cookies_path}")
-        else:
-            self.logger.info("yt-dlp 未配置 cookies（抖音/快手可能下载失败，请在设置中配置 asr.cookies_file）")
-        # 方式 1：Python API
+        use_cookies_file = bool(cookies_path and cookies_path.exists() and cookies_path.is_file())
+        configured_browser = self.cookies_from_browser.lower().strip() if self.cookies_from_browser else ""
+        # 多浏览器回退列表：配置的优先，再尝试其他常见浏览器
+        all_browsers = ["chrome", "edge", "firefox", "brave"]
+        if configured_browser and configured_browser in all_browsers:
+            all_browsers = [configured_browser] + [b for b in all_browsers if b != configured_browser]
+        elif configured_browser:
+            all_browsers = [configured_browser] + all_browsers
+        if not configured_browser and not use_cookies_file:
+            all_browsers = []  # 未配置则不尝试浏览器
+
+        work_dir = Path(output_template).parent
+        base_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.douyin.com/",
+            },
+            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
+        }
+
+        # 方式 1：Python API，多浏览器回退
         try:
             import yt_dlp
-            opts = {
-                "format": "bestaudio/best",
-                "outtmpl": output_template,
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "http_headers": {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": "https://www.douyin.com/",
-                },
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                }],
-            }
-            if use_cookies:
-                opts["cookiefile"] = str(cookies_path)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            # 查找下载结果
-            work_dir = Path(output_template).parent
-            for ext in ("mp3", "m4a", "webm", "opus", "wav"):
-                files = list(work_dir.glob(f"ref.*{ext}"))
-                if files:
-                    return files[0]
-        except Exception as e:
-            self.logger.warning(f"yt-dlp Python API 下载失败: {e}")
+            last_err = ""
+            # 尝试配置的浏览器（多浏览器回退），再尝试 cookies 文件
+            attempts = []
+            for b in all_browsers:
+                attempts.append(("browser", b))
+            if use_cookies_file:
+                attempts.append(("file", str(cookies_path)))
+            attempts.append(("none", None))  # 最后无 cookies 尝试一次
 
-        # 方式 2：命令行
+            for cookie_type, cookie_val in attempts:
+                opts = dict(base_opts)
+                if cookie_type == "browser":
+                    opts["cookiesfrombrowser"] = (cookie_val,)
+                    self.logger.info(f"yt-dlp 尝试从 {cookie_val} 读取 cookies")
+                elif cookie_type == "file":
+                    opts["cookiefile"] = cookie_val
+                    self.logger.info(f"yt-dlp 使用 cookies 文件: {cookie_val}")
+                else:
+                    self.logger.info("yt-dlp 无 cookies 尝试（最后手段）")
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([url])
+                    for ext in ("mp3", "m4a", "webm", "opus", "wav"):
+                        files = list(work_dir.glob(f"ref.*{ext}"))
+                        if files:
+                            return files[0]
+                    return None  # 下载成功但找不到文件
+                except Exception as e:
+                    last_err = str(e)
+                    err_lower = last_err.lower()
+                    # cookies 读取失败（数据库锁定）→ 换浏览器继续
+                    if "could not copy" in err_lower and "cookie" in err_lower:
+                        self.logger.warning(f"{cookie_val} cookies 数据库锁定（浏览器运行中），尝试其他浏览器")
+                        continue
+                    # Fresh cookies needed → cookies 无效，换来源继续
+                    if "fresh cookies" in err_lower:
+                        self.logger.warning(f"{cookie_val} cookies 无效或未登录抖音，尝试其他来源")
+                        continue
+                    # 其他错误（非 cookies 问题）→ 不再重试
+                    self.logger.warning(f"yt-dlp 下载失败: {last_err[:120]}")
+                    break
+            if last_err:
+                self.logger.warning(f"yt-dlp 所有 cookies 来源均失败，最后错误: {last_err[:120]}")
+        except ImportError:
+            self.logger.warning("yt-dlp Python 模块未安装")
+        except Exception as e:
+            self.logger.warning(f"yt-dlp Python API 异常: {e}")
+
+        # 方式 2：命令行（最后兜底，用配置的浏览器）
         if shutil.which("yt-dlp"):
             import subprocess
             cmd = [
@@ -506,7 +829,9 @@ class ScriptExtractor(BaseModule):
                 "-o", output_template,
                 "--no-playlist", "--no-warnings", url,
             ]
-            if use_cookies:
+            if configured_browser:
+                cmd.extend(["--cookies-from-browser", configured_browser])
+            elif use_cookies_file:
                 cmd.extend(["--cookies", str(cookies_path)])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:

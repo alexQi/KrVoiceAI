@@ -3891,80 +3891,48 @@ input[type="color"]::-webkit-color-swatch {
   }
 }
 
-/* ---------- 文案提取 Cookies 配置区 ---------- */
-.cookies-config {
-  margin: 16px 0 4px;
-  padding: 14px 16px;
-  background: rgba(245, 158, 11, 0.06);
-  border: 1px solid rgba(245, 158, 11, 0.2);
-  border-radius: var(--radius-md);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* ---------- Lucide 矢量图标系统（替换 Emoji）---------- */
+.nav-icon svg,
+.bottom-nav-icon svg,
+.card-title-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
 }
-
-.cookies-header {
+.nav-icon {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: center;
 }
-
-.cookies-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+.nav-icon svg {
+  color: currentColor;
 }
-
-.cookies-status {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  background: rgba(245, 158, 11, 0.15);
-  color: var(--color-warning);
-  white-space: nowrap;
+.bottom-nav-icon svg {
+  width: 22px;
+  height: 22px;
 }
-
-.cookies-status.configured {
-  background: rgba(16, 185, 129, 0.15);
-  color: var(--color-success);
-}
-
-.cookies-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.cookies-upload-btn {
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-}
-
-.cookies-upload-btn:hover {
-  border-color: var(--accent-primary);
+.card-title-icon svg {
   color: var(--accent-primary);
 }
+/* 按钮内图标对齐 */
+.btn svg {
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+  margin-right: 4px;
+  stroke-width: 2;
+}
 
-.cookies-hint {
+/* ---------- 文案提取提示区（替代原 cookies 配置） ---------- */
+.extract-tip {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: var(--radius-md);
   font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
-  padding-top: 4px;
-  border-top: 1px solid var(--border-subtle);
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
-@media (max-width: 480px) {
-  .cookies-config {
-    padding: 12px;
-  }
-  .cookies-actions {
-    flex-direction: column;
-  }
-  .cookies-actions .btn {
-    width: 100%;
-  }
-}
 

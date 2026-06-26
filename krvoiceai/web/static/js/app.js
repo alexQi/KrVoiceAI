@@ -111,6 +111,9 @@ function navigate(page) {
   if (page === 'settings-video') loadVideoSettings();
   if (page === 'settings-scene') loadSceneEffectSettings();
   if (page === 'settings-publish') loadPublishSettings();
+
+  // 切换页面后重新渲染 Lucide 图标（覆盖动态生成的内容）
+  if (window.lucide) lucide.createIcons();
 }
 
 // ========== 移动端侧边栏抽屉 ==========
@@ -600,7 +603,6 @@ async function loadWizardData() {
     document.getElementById('wiz-ai-generate-btn').addEventListener('click', wizardAiGenerate);
     document.getElementById('wiz-extract-btn').addEventListener('click', wizardExtractScript);
     bindShareTextPreview(); // 分享文本实时解析预览
-    bindCookiesConfig(); // 抖音/快手 cookies 配置
     document.getElementById('wiz-script-process-btn').addEventListener('click', wizardScriptProcess);
     document.getElementById('wiz-generate-btn').addEventListener('click', wizardGenerate);
     document.getElementById('wiz-prev-btn').addEventListener('click', () => wizardGoToStep(wizardState.currentStep - 1));
@@ -1145,71 +1147,6 @@ async function previewShareText() {
   }
 }
 
-// ============ 文案提取 Cookies 配置（抖音/快手反爬绕过） ============
-async function loadCookiesStatus() {
-  const statusEl = document.getElementById('wiz-cookies-status');
-  const deleteBtn = document.getElementById('wiz-cookies-delete');
-  if (!statusEl) return;
-  try {
-    const info = await api('/api/script/cookies');
-    if (info.configured && info.exists) {
-      statusEl.textContent = '✓ 已配置';
-      statusEl.classList.add('configured');
-      if (deleteBtn) deleteBtn.style.display = 'inline-flex';
-    } else if (info.configured && !info.exists) {
-      statusEl.textContent = '⚠ 文件丢失';
-      statusEl.classList.remove('configured');
-      if (deleteBtn) deleteBtn.style.display = 'inline-flex';
-    } else {
-      statusEl.textContent = '未配置';
-      statusEl.classList.remove('configured');
-      if (deleteBtn) deleteBtn.style.display = 'none';
-    }
-  } catch (e) {
-    statusEl.textContent = '查询失败';
-    statusEl.classList.remove('configured');
-  }
-}
-
-function bindCookiesConfig() {
-  const fileInput = document.getElementById('wiz-cookies-file');
-  const deleteBtn = document.getElementById('wiz-cookies-delete');
-  if (fileInput) {
-    fileInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const formData = new FormData();
-      formData.append('file', file);
-      const btn = fileInput.closest('.cookies-upload-btn');
-      if (btn) { btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none'; }
-      toast('cookies 上传中…', 'info');
-      try {
-        const result = await api('/api/script/cookies', { method: 'POST', body: formData });
-        toast(`cookies 上传成功（${result.size} bytes），yt-dlp 将自动使用`, 'success');
-        loadCookiesStatus();
-      } catch (err) {
-        toast(`cookies 上传失败: ${err.message}`, 'error');
-      } finally {
-        if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
-        fileInput.value = '';
-      }
-    });
-  }
-  if (deleteBtn) {
-    deleteBtn.addEventListener('click', async () => {
-      if (!confirm('确定删除 cookies 文件？删除后抖音/快手可能无法下载视频音频。')) return;
-      try {
-        await api('/api/script/cookies', { method: 'DELETE' });
-        toast('cookies 已删除', 'info');
-        loadCookiesStatus();
-      } catch (err) {
-        toast(`删除失败: ${err.message}`, 'error');
-      }
-    });
-  }
-  loadCookiesStatus();
-}
-
 async function wizardExtractScript() {
   const refUrl = document.getElementById('wiz-ref-url').value.trim();
   if (!refUrl) { toast('请输入参考视频链接', 'error'); return; }
@@ -1229,7 +1166,7 @@ async function wizardExtractScript() {
       if (result.mock) {
         toast('文案提取成功（Mock 模式：未配置 ASR，返回示例文案。配置 MiMo ASR 可提取真实文案）', 'success');
       } else if (result.degraded) {
-        toast('⚠ 已降级提取：抖音/快手反爬导致无法下载视频音频，仅返回分享描述。请在下方配置 cookies 后重新提取', 'info');
+        toast('已提取文案描述（字幕暂不可用，如需完整文案可直接编辑）', 'info');
       } else {
         toast('文案提取成功', 'success');
       }
@@ -2049,7 +1986,8 @@ async function handleGenerate() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 生成中...';
 
-  // 初始进度展示
+  // 统一进度反馈：显示全局进度模态框（与创作向导一致）
+  showProgressModal();
   renderPipeline({});
 
   try {
@@ -2070,6 +2008,11 @@ async function handleGenerate() {
       }
     }
     renderPipeline(stepsState);
+    updateProgressModal(stepsState, result);
+
+    // 完成进度模态框（统一成功/失败反馈）
+    const hasFailed = !result.success;
+    finishProgressModal(result, hasFailed);
 
     // 展示结果
     const output = result.output || {};
@@ -2105,11 +2048,12 @@ async function handleGenerate() {
 
     toast(result.success ? '视频生成成功！' : '生成未完全成功', result.success ? 'success' : 'error');
   } catch (e) {
+    finishProgressModalError(e.message);
     toast(`生成失败: ${e.message}`, 'error');
     console.error(e);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '🚀 开始生成视频';
+    btn.innerHTML = '开始生成视频';
   }
 }
 
@@ -2668,6 +2612,9 @@ async function handleBatchGenerate() {
 // ========== 初始化 ==========
 
 document.addEventListener('DOMContentLoaded', () => {
+  // 初始化 Lucide 矢量图标（替换全站 Emoji，专业图标系统）
+  if (window.lucide) lucide.createIcons();
+
   // 导航绑定
   PAGES.forEach(p => {
     const nav = document.getElementById(`nav-${p}`);
