@@ -499,19 +499,26 @@ class ScriptExtractor(BaseModule):
         return ""
 
     def _fetch_douyin_share(self, url: str, share_text: str = "") -> str:
-        """抖音分享页抓取：解析内嵌 JSON 拿 desc + 字幕 URL
+        """抖音分享页抓取：Playwright 无头浏览器绕过 JS 挑战（用户无感知）
 
-        抖音短链 v.douyin.com/xxx → 302 重定向到 www.iesdouyin.com/share/video/{aweme_id}
-        注意：直接 follow_redirects 会被抖音 RST（WinError 10054），需手动解析 Location。
-        抖音分享页有 JS 挑战，纯 httpx 可能拿不到完整 JSON，降级到 desc 兜底。
+        降级链路：
+        1. 优先 Playwright + 系统 Chrome：自动绕过 JS 挑战，拿完整文案 + cookies
+        2. 降级 httpx 解析短链 Location → iesdouyin 分享页（可能被 JS 挑战拦截）
+        3. 全部失败返回 ""，交给上层 yt-dlp 兜底
         """
+        # 优先：Playwright 无头浏览器（最可靠，绕过所有 JS 挑战）
+        text = self._fetch_with_playwright(url, "douyin")
+        if text and len(text) >= 10:
+            self.logger.info(f"抖音 Playwright 提取成功: {len(text)} 字")
+            return text
+
+        # 降级：httpx 解析（可能被 JS 挑战拦截，作为兜底尝试）
         headers = {
             "User-Agent": self._BROWSER_UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9",
             "Referer": "https://www.douyin.com/",
         }
-        # 步骤1：不跟随重定向，手动解析 Location 拿 aweme_id（避免短链 RST）
         aweme_id = ""
         try:
             r = httpx.get(url, headers=headers, timeout=15, follow_redirects=False)
@@ -523,7 +530,6 @@ class ScriptExtractor(BaseModule):
         except Exception as e:
             self.logger.debug(f"抖音短链解析失败: {e}")
 
-        # 步骤2：用 aweme_id 访问 iesdouyin 分享页（可能有 JS 挑战，但不会 RST）
         html = ""
         if aweme_id:
             try:
@@ -533,23 +539,110 @@ class ScriptExtractor(BaseModule):
             except Exception as e:
                 self.logger.debug(f"iesdouyin 分享页获取失败: {e}")
 
-        # 步骤3：解析内嵌 JSON
         desc, subtitle_url, _ = self._parse_douyin_html(html) if html else ("", "", "")
 
-        # 优先：下载字幕 SRT（最准确，抖音官方转写）
         if subtitle_url:
             sub_text = self._download_subtitle(subtitle_url, headers)
             if sub_text and len(sub_text) >= 10:
                 self.logger.info(f"抖音字幕提取成功: {len(sub_text)} 字")
                 return sub_text
 
-        # 次选：desc 完整文案（视频描述/标题，口播视频常含完整文案）
         if desc and len(desc) >= 20:
             self.logger.info(f"抖音 desc 提取成功: {len(desc)} 字")
             return desc
 
-        # 注：不在此处做分享文本兜底，留给上层 yt-dlp 失败后再降级
-        # 这样 yt-dlp + 浏览器 cookies 有机会下载完整视频做 ASR 转写
+        return ""
+
+    def _fetch_with_playwright(self, url: str, platform: str = "douyin") -> str:
+        """用 Playwright 无头浏览器渲染页面并提取文案（绕过 JS 挑战，用户无感知）
+
+        系统 Chrome 已安装时使用 channel='chrome'，无需下载 Chromium 内核。
+        抖音分享页重定向到 douyin.com/video/{id}，title/meta 含完整文案。
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.logger.debug("Playwright 未安装，跳过无头浏览器方案")
+            return ""
+
+        # 先解析 aweme_id（用于直接访问分享页，避免短链超时）
+        aweme_id = ""
+        try:
+            headers = {"User-Agent": self._BROWSER_UA}
+            r = httpx.get(url, headers=headers, timeout=10, follow_redirects=False)
+            if r.status_code in (301, 302, 303, 307, 308):
+                loc = r.headers.get("location", "")
+                am = re.search(r"/video/(\d+)", loc)
+                if am:
+                    aweme_id = am.group(1)
+        except Exception:
+            pass
+
+        share_url = url
+        if aweme_id:
+            share_url = f"https://www.iesdouyin.com/share/video/{aweme_id}/"
+
+        try:
+            with sync_playwright() as p:
+                # 优先系统 Chrome（无需下载内核），降级到 Chromium
+                try:
+                    browser = p.chromium.launch(channel="chrome", headless=True)
+                except Exception:
+                    browser = p.chromium.launch(headless=True)
+
+                context = browser.new_context(
+                    user_agent=self._BROWSER_UA,
+                    viewport={"width": 1920, "height": 1080},
+                )
+                page = context.new_page()
+
+                self.logger.info(f"Playwright 渲染: {share_url}")
+                try:
+                    page.goto(share_url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(5000)  # 等待 JS 渲染
+                except Exception as e:
+                    self.logger.debug(f"Playwright 页面加载超时（可能仍在渲染）: {str(e)[:80]}")
+
+                # 提取文案：title 和 meta description 是最可靠的来源
+                title = page.title() or ""
+                meta_desc = page.evaluate(
+                    'document.querySelector("meta[name=description]")?.getAttribute("content") || ""'
+                )
+
+                # 清理 title：去掉 " - 抖音" 后缀和话题标签
+                desc = ""
+                if title:
+                    desc = re.sub(r"\s*-\s*抖音\s*$", "", title).strip()
+                    desc = re.sub(r"#[\w]+$", "", desc).strip()  # 去末尾话题标签
+                # meta description 更完整，优先使用
+                if meta_desc and len(meta_desc) > len(desc):
+                    # 去掉 meta desc 末尾的发布信息
+                    desc = re.sub(r"\s*-\s*.*?于\d+.*?发布在抖音.*$", "", meta_desc).strip()
+                    desc = re.sub(r"#[\w]+$", "", desc).strip()  # 去末尾话题标签
+
+                if desc and len(desc) >= 10:
+                    self.logger.info(f"Playwright 提取文案: {len(desc)} 字")
+                    browser.close()
+                    return desc
+
+                # 尝试从 RENDER_DATA 提取
+                render_data = page.evaluate(
+                    'document.getElementById("RENDER_DATA")?.textContent || ""'
+                )
+                if render_data:
+                    from urllib.parse import unquote
+                    decoded = unquote(render_data)
+                    dm = re.search(r'"desc":"((?:[^"\\]|\\.)*)"', decoded)
+                    if dm:
+                        desc = dm.group(1).encode().decode("unicode_escape", errors="ignore")
+                        if desc and len(desc) >= 10:
+                            self.logger.info(f"Playwright RENDER_DATA 提取: {len(desc)} 字")
+                            browser.close()
+                            return desc
+
+                browser.close()
+        except Exception as e:
+            self.logger.warning(f"Playwright 渲染失败: {str(e)[:120]}")
         return ""
 
     def _parse_douyin_html(self, html: str) -> tuple[str, str, str]:
