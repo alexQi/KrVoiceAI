@@ -168,15 +168,27 @@ class ScriptExtractor(BaseModule):
         is_video = self._is_video_url(video_url)
 
         if is_video:
-            # === 优先：网页抓取（轻量，无需下载视频/无需用户上传 cookies/无需 ASR）===
-            # 抖音/快手/B站分享页内嵌 JSON，含完整 desc 和字幕 URL
-            # 90% 口播视频有自动字幕 → 下载字幕 SRT 即可提取完整文案（秒级，抗反爬）
-            web_text = self._extract_from_web_page(video_url, cleaned_input)
-            if web_text:
-                self.logger.info(f"网页抓取成功，文案 {len(web_text)} 字")
-                return self._clean_text(web_text)
+            # === 优先：Playwright 网页抓取（绕过 JS 挑战，提取 desc + 视频 URL）===
+            web_desc, video_dl_url = self._extract_from_web_page(video_url, cleaned_input)
 
-            # 网页抓取失败 → yt-dlp + ASR（重型兜底，cookies 服务端自动获取）
+            # 如果拿到视频 URL 且 ASR 可用 → 下载视频音频 + ASR 转写完整口播文案
+            if video_dl_url and self.asr_provider in ("funasr", "mimo", "whisper_local"):
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    try:
+                        text = self._download_and_transcribe(video_dl_url, Path(tmp))
+                        if text and len(text) >= 10:
+                            self.logger.info(f"视频下载+ASR 转写成功: {len(text)} 字")
+                            return self._clean_text(text)
+                    except Exception as e:
+                        self.logger.warning(f"视频下载+ASR 转写失败: {e}")
+
+            # desc 足够长 → 直接用（标题/描述文案）
+            if web_desc and len(web_desc) >= 10:
+                self.logger.info(f"网页抓取文案: {len(web_desc)} 字")
+                return self._clean_text(web_desc)
+
+            # 网页抓取失败 → yt-dlp + ASR（重型兜底）
             use_real = self._ytdlp_available and self.asr_provider in ("funasr", "mimo", "whisper_local")
             if use_real:
                 import tempfile
@@ -185,7 +197,6 @@ class ScriptExtractor(BaseModule):
                         text = self._extract_real(video_url, Path(tmp))
                     except Exception as e:
                         self.logger.warning(f"视频音频下载/转写失败: {e}")
-                        # 兜底：分享文本里的文案描述
                         desc = self._extract_desc_from_share_text(cleaned_input)
                         if desc:
                             self.logger.info(f"已从分享文本提取文案描述: {len(desc)} 字")
@@ -471,46 +482,32 @@ class ScriptExtractor(BaseModule):
         "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     )
 
-    def _extract_from_web_page(self, url: str, share_text: str = "") -> str:
-        """从视频分享页抓取文案（业界主流轻量方案，用户无感知）
+    def _extract_from_web_page(self, url: str, share_text: str = "") -> tuple[str, str]:
+        """从视频分享页抓取文案 + 视频 URL（用户无感知）
 
-        降级链路（全部服务端自动，无需用户介入）：
-        1. httpx.get 短链 → 跟随重定向 → 获取分享页 HTML
-        2. 解析内嵌 JSON 提取 desc（完整文案描述）和 subtitle URL
-        3. 优先下载字幕 SRT → 提取完整文案（抖音自动字幕，准确率高）
-        4. desc 足够长（≥20字）→ 直接用 desc
-        5. 全部失败返回 ""，交给上层 yt-dlp 兜底
-
-        Args:
-            url: 视频 URL（已清洗）
-            share_text: 用户粘贴的原始分享文本（含描述，作为兜底）
-        Returns:
-            提取的文案文本，失败返回 ""
+        Returns: (desc, video_dl_url)，失败返回 ("", "")
         """
         try:
             if "douyin.com" in url or "iesdouyin" in url:
                 return self._fetch_douyin_share(url, share_text)
             if "kuaishou.com" in url:
-                return self._fetch_kuaishou_share(url, share_text)
+                return self._fetch_kuaishou_share(url, share_text), ""
             if "bilibili.com" in url or "b23.tv" in url:
-                return self._fetch_bilibili_share(url, share_text)
+                return self._fetch_bilibili_share(url, share_text), ""
         except Exception as e:
             self.logger.warning(f"网页抓取失败 ({url[:60]}): {e}")
-        return ""
+        return "", ""
 
-    def _fetch_douyin_share(self, url: str, share_text: str = "") -> str:
+    def _fetch_douyin_share(self, url: str, share_text: str = "") -> tuple[str, str]:
         """抖音分享页抓取：Playwright 无头浏览器绕过 JS 挑战（用户无感知）
 
-        降级链路：
-        1. 优先 Playwright + 系统 Chrome：自动绕过 JS 挑战，拿完整文案 + cookies
-        2. 降级 httpx 解析短链 Location → iesdouyin 分享页（可能被 JS 挑战拦截）
-        3. 全部失败返回 ""，交给上层 yt-dlp 兜底
+        Returns: (desc, video_dl_url)
         """
         # 优先：Playwright 无头浏览器（最可靠，绕过所有 JS 挑战）
-        text = self._fetch_with_playwright(url, "douyin")
-        if text and len(text) >= 10:
-            self.logger.info(f"抖音 Playwright 提取成功: {len(text)} 字")
-            return text
+        desc, video_url = self._fetch_with_playwright(url, "douyin")
+        if desc and len(desc) >= 10:
+            self.logger.info(f"抖音 Playwright 提取成功: {len(desc)} 字, video_url={'有' if video_url else '无'}")
+            return desc, video_url
 
         # 降级：httpx 解析（可能被 JS 挑战拦截，作为兜底尝试）
         headers = {
@@ -539,31 +536,30 @@ class ScriptExtractor(BaseModule):
             except Exception as e:
                 self.logger.debug(f"iesdouyin 分享页获取失败: {e}")
 
-        desc, subtitle_url, _ = self._parse_douyin_html(html) if html else ("", "", "")
+        http_desc, subtitle_url, _ = self._parse_douyin_html(html) if html else ("", "", "")
 
         if subtitle_url:
             sub_text = self._download_subtitle(subtitle_url, headers)
             if sub_text and len(sub_text) >= 10:
                 self.logger.info(f"抖音字幕提取成功: {len(sub_text)} 字")
-                return sub_text
+                return sub_text, ""
 
-        if desc and len(desc) >= 20:
-            self.logger.info(f"抖音 desc 提取成功: {len(desc)} 字")
-            return desc
+        if http_desc and len(http_desc) >= 20:
+            self.logger.info(f"抖音 desc 提取成功: {len(http_desc)} 字")
+            return http_desc, ""
 
-        return ""
+        return "", ""
 
-    def _fetch_with_playwright(self, url: str, platform: str = "douyin") -> str:
-        """用 Playwright 无头浏览器渲染页面并提取文案（绕过 JS 挑战，用户无感知）
+    def _fetch_with_playwright(self, url: str, platform: str = "douyin") -> tuple[str, str]:
+        """用 Playwright 无头浏览器渲染页面并提取文案 + 视频 URL（用户无感知）
 
-        系统 Chrome 已安装时使用 channel='chrome'，无需下载 Chromium 内核。
-        抖音分享页重定向到 douyin.com/video/{id}，title/meta 含完整文案。
+        Returns: (desc, video_dl_url)
         """
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
             self.logger.debug("Playwright 未安装，跳过无头浏览器方案")
-            return ""
+            return "", ""
 
         # 先解析 aweme_id（用于直接访问分享页，避免短链超时）
         aweme_id = ""
@@ -584,7 +580,6 @@ class ScriptExtractor(BaseModule):
 
         try:
             with sync_playwright() as p:
-                # 优先系统 Chrome（无需下载内核），降级到 Chromium
                 try:
                     browser = p.chromium.launch(channel="chrome", headless=True)
                 except Exception:
@@ -599,51 +594,108 @@ class ScriptExtractor(BaseModule):
                 self.logger.info(f"Playwright 渲染: {share_url}")
                 try:
                     page.goto(share_url, wait_until="domcontentloaded", timeout=30000)
-                    page.wait_for_timeout(5000)  # 等待 JS 渲染
+                    page.wait_for_timeout(5000)
                 except Exception as e:
-                    self.logger.debug(f"Playwright 页面加载超时（可能仍在渲染）: {str(e)[:80]}")
+                    self.logger.debug(f"Playwright 页面加载超时: {str(e)[:80]}")
 
-                # 提取文案：title 和 meta description 是最可靠的来源
+                # 提取文案：title 和 meta description
                 title = page.title() or ""
                 meta_desc = page.evaluate(
                     'document.querySelector("meta[name=description]")?.getAttribute("content") || ""'
                 )
 
-                # 清理 title：去掉 " - 抖音" 后缀和话题标签
                 desc = ""
                 if title:
                     desc = re.sub(r"\s*-\s*抖音\s*$", "", title).strip()
-                    desc = re.sub(r"#[\w]+$", "", desc).strip()  # 去末尾话题标签
-                # meta description 更完整，优先使用
+                    desc = re.sub(r"#[\w]+$", "", desc).strip()
                 if meta_desc and len(meta_desc) > len(desc):
-                    # 去掉 meta desc 末尾的发布信息
                     desc = re.sub(r"\s*-\s*.*?于\d+.*?发布在抖音.*$", "", meta_desc).strip()
-                    desc = re.sub(r"#[\w]+$", "", desc).strip()  # 去末尾话题标签
+                    desc = re.sub(r"#[\w]+$", "", desc).strip()
 
-                if desc and len(desc) >= 10:
-                    self.logger.info(f"Playwright 提取文案: {len(desc)} 字")
-                    browser.close()
-                    return desc
-
-                # 尝试从 RENDER_DATA 提取
-                render_data = page.evaluate(
-                    'document.getElementById("RENDER_DATA")?.textContent || ""'
+                # 提取视频 URL（从 video 标签的 currentSrc）
+                video_dl_url = page.evaluate(
+                    'document.querySelector("video")?.currentSrc || ""'
                 )
-                if render_data:
-                    from urllib.parse import unquote
-                    decoded = unquote(render_data)
-                    dm = re.search(r'"desc":"((?:[^"\\]|\\.)*)"', decoded)
-                    if dm:
-                        desc = dm.group(1).encode().decode("unicode_escape", errors="ignore")
-                        if desc and len(desc) >= 10:
-                            self.logger.info(f"Playwright RENDER_DATA 提取: {len(desc)} 字")
-                            browser.close()
-                            return desc
+
+                # 尝试从 RENDER_DATA 提取 desc（如果 title/meta 不够）
+                if (not desc or len(desc) < 20) and video_dl_url:
+                    render_data = page.evaluate(
+                        'document.getElementById("RENDER_DATA")?.textContent || ""'
+                    )
+                    if render_data:
+                        from urllib.parse import unquote
+                        decoded = unquote(render_data)
+                        dm = re.search(r'"desc":"((?:[^"\\]|\\.)*)"', decoded)
+                        if dm:
+                            rd_desc = dm.group(1).encode().decode("unicode_escape", errors="ignore")
+                            if rd_desc and len(rd_desc) > len(desc):
+                                desc = rd_desc
 
                 browser.close()
+
+                if desc and len(desc) >= 10:
+                    self.logger.info(f"Playwright 提取: desc={len(desc)}字, video_url={'有' if video_dl_url else '无'}")
+                    return desc, video_dl_url
+                elif video_dl_url:
+                    self.logger.info(f"Playwright 仅提取到视频 URL（无文案），将做 ASR 转写")
+                    return "", video_dl_url
         except Exception as e:
             self.logger.warning(f"Playwright 渲染失败: {str(e)[:120]}")
-        return ""
+        return "", ""
+
+    def _download_and_transcribe(self, video_url: str, work_dir: Path) -> str:
+        """下载视频 → FFmpeg 提取音频 → ASR 转写完整口播文案
+
+        用 httpx 下载视频（无需 yt-dlp），FFmpeg 提取音频，ASR 转写。
+        """
+        import tempfile
+        video_path = work_dir / "ref_video.mp4"
+        audio_path = work_dir / "audio.wav"
+
+        # 下载视频
+        self.logger.info(f"下载视频: {video_url[:80]}...")
+        headers = {
+            "User-Agent": self._BROWSER_UA,
+            "Referer": "https://www.douyin.com/",
+        }
+        with httpx.Client(headers=headers, timeout=60, follow_redirects=True) as client:
+            with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                with open(video_path, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
+        self.logger.info(f"视频下载完成: {video_path.stat().st_size} bytes")
+
+        # FFmpeg 提取音频 + 音量归一化
+        raw_audio = work_dir / "raw.wav"
+        self.ffmpeg.convert_audio(video_path, raw_audio, sample_rate=16000, channels=1)
+        import subprocess
+        norm_cmd = [
+            self.ffmpeg.ffmpeg, "-y", "-i", str(raw_audio),
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000",
+            "-ac", "1", str(audio_path),
+        ]
+        r = subprocess.run(norm_cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not audio_path.exists():
+            self.logger.warning(f"loudnorm 失败，用原始音频: {r.stderr[-200:]}")
+            audio_path = raw_audio
+        else:
+            self.logger.info("音频已归一化（loudnorm -16dB）")
+
+        # ASR 转写
+        if self.asr_provider == "mimo":
+            return self._transcribe_mimo(audio_path)
+        elif self.asr_provider == "funasr":
+            try:
+                return self._transcribe_funasr(audio_path)
+            except ImportError:
+                self.logger.warning("FunASR 未安装，降级到 whisper")
+                return self._transcribe_local(audio_path)
+        elif self.asr_provider == "whisper_local":
+            return self._transcribe_local(audio_path)
+        else:
+            self.logger.warning(f"ASR provider={self.asr_provider} 不支持，降级 mock")
+            return self._extract_mock(str(video_path))
 
     def _parse_douyin_html(self, html: str) -> tuple[str, str, str]:
         """从抖音分享页 HTML 解析 desc 和字幕 URL

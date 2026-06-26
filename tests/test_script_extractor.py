@@ -16,7 +16,7 @@ def extractor(isolated_config):
     ext = ScriptExtractor()
     ext.setup()
     # Mock 网页抓取方法，避免测试时发起真实网络请求（Playwright/httpx）
-    ext._extract_from_web_page = MagicMock(return_value="")
+    ext._extract_from_web_page = MagicMock(return_value=("", ""))
     return ext
 
 
