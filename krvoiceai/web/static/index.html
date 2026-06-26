@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=5.0">
   <title>KrVoiceAI · 虚拟人口播智能体</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=20260626a">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260626b">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
   <!-- 移动端点击修复（内联确保优先级，避免外部CSS缓存导致失效） -->
   <style>
@@ -463,6 +463,23 @@
                 </div>
               </div>
               <button class="btn btn-primary" id="wiz-extract-btn" type="button">🔗 提取文案</button>
+              <div class="cookies-config" id="wiz-cookies-config">
+                <div class="cookies-header">
+                  <span class="cookies-title">🍪 抖音/快手 Cookies</span>
+                  <span class="cookies-status" id="wiz-cookies-status">检查中…</span>
+                </div>
+                <div class="cookies-actions">
+                  <label class="btn btn-secondary btn-sm cookies-upload-btn">
+                    📁 上传 cookies.txt
+                    <input type="file" id="wiz-cookies-file" accept=".txt,text/plain" hidden>
+                  </label>
+                  <button class="btn btn-ghost btn-sm" id="wiz-cookies-delete" type="button" style="display:none">🗑️ 删除</button>
+                </div>
+                <div class="cookies-hint" id="wiz-cookies-hint">
+                  抖音/快手反爬严格，未配置 cookies 常导致 "Fresh cookies needed" 下载失败。
+                  用浏览器插件（EditThisCookie / Get cookies.txt）登录 douyin.com 后导出 cookies.txt（Netscape 格式）。
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2264,7 +2281,7 @@
   <!-- Toast 容器 -->
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260626a"></script>
+  <script src="/static/js/app.js?v=20260626b"></script>
   <script src="/static/js/settings.js?v=20260621d"></script>
 </body>
 </html>

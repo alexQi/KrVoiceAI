@@ -756,6 +756,88 @@ def create_app() -> FastAPI:
             logger.warning(f"解析分享文本失败: {e}")
             return {"success": False, "url": "", "desc": "", "error": str(e)}
 
+    # ============ 文案提取 Cookies 配置（抖音/快手反爬绕过） ============
+
+    @app.post("/api/script/cookies")
+    async def upload_script_cookies(file: UploadFile = File(...)):
+        """上传抖音/快手 cookies 文件（Netscape 格式 .txt），用于 yt-dlp 绕过反爬
+
+        上传后自动更新 asr.cookies_file 配置并触发热重建，立即生效。
+        导出方法：浏览器安装 EditThisCookie / Get cookies.txt 插件，
+        访问 douyin.com 并登录后导出为 .txt（Netscape 格式）。
+        """
+        cookies_dir = Path("./config/cookies")
+        cookies_dir.mkdir(parents=True, exist_ok=True)
+        # 校验扩展名
+        suffix = Path(file.filename or "cookies.txt").suffix.lower()
+        if suffix not in (".txt", ""):
+            raise HTTPException(400, f"cookies 文件需为 .txt 格式（Netscape），收到: {suffix}")
+        # 固定文件名（覆盖旧文件）
+        save_path = cookies_dir / "douyin_cookies.txt"
+        content = await file.read()
+        # 简单校验 Netscape 格式（首行通常为 # Netscape HTTP Cookie File）
+        text_head = content.decode("utf-8", errors="ignore").strip()[:200]
+        if text_head and "#" not in text_head and "Netscape" not in text_head:
+            logger.warning("上传的 cookies 文件可能不是标准 Netscape 格式，仍尝试保存")
+        with open(save_path, "wb") as f:
+            f.write(content)
+        # 更新配置并触发热重建（script_extractor 重新读取 cookies_file）
+        abs_path = str(save_path.resolve())
+        try:
+            get_settings_manager().update_section("asr", {"cookies_file": abs_path})
+        except Exception as e:
+            logger.warning(f"更新 asr.cookies_file 配置失败: {e}")
+        logger.info(f"cookies 文件已保存: {save_path} ({len(content)} bytes), 配置已热更新")
+        return {
+            "success": True,
+            "path": abs_path,
+            "filename": "douyin_cookies.txt",
+            "size": len(content),
+            "message": "cookies 已配置，yt-dlp 下载将自动使用",
+        }
+
+    @app.get("/api/script/cookies")
+    async def get_script_cookies():
+        """查询当前 cookies 配置状态"""
+        try:
+            asr_config = get_settings_manager().get_section("asr", mask_sensitive=False)
+        except Exception:
+            asr_config = {}
+        cookies_file = asr_config.get("cookies_file", "")
+        exists = bool(cookies_file and Path(cookies_file).exists())
+        info: dict = {
+            "configured": bool(cookies_file),
+            "exists": exists,
+            "path": cookies_file,
+        }
+        if exists:
+            p = Path(cookies_file)
+            info["size"] = p.stat().st_size
+            info["mtime"] = int(p.stat().st_mtime)
+        return info
+
+    @app.delete("/api/script/cookies")
+    async def delete_script_cookies():
+        """删除 cookies 文件并清空配置"""
+        try:
+            asr_config = get_settings_manager().get_section("asr", mask_sensitive=False)
+        except Exception:
+            asr_config = {}
+        cookies_file = asr_config.get("cookies_file", "")
+        deleted = False
+        if cookies_file and Path(cookies_file).exists():
+            try:
+                Path(cookies_file).unlink()
+                deleted = True
+            except Exception as e:
+                logger.warning(f"删除 cookies 文件失败: {e}")
+        # 清空配置并热重建
+        try:
+            get_settings_manager().update_section("asr", {"cookies_file": ""})
+        except Exception as e:
+            logger.warning(f"清空 asr.cookies_file 配置失败: {e}")
+        return {"success": True, "deleted": deleted}
+
     # ============ 批量处理 API ============
 
     @app.post("/api/batch/generate")

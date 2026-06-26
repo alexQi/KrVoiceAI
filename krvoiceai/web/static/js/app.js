@@ -15,6 +15,9 @@ async function api(path, options = {}) {
   };
   if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
     opts.body = JSON.stringify(opts.body);
+  } else if (opts.body instanceof FormData) {
+    // FormData：让浏览器自动设置 multipart Content-Type（含 boundary），不能手动指定
+    delete opts.headers['Content-Type'];
   }
   const resp = await fetch(url, opts);
   if (!resp.ok) {
@@ -597,6 +600,7 @@ async function loadWizardData() {
     document.getElementById('wiz-ai-generate-btn').addEventListener('click', wizardAiGenerate);
     document.getElementById('wiz-extract-btn').addEventListener('click', wizardExtractScript);
     bindShareTextPreview(); // 分享文本实时解析预览
+    bindCookiesConfig(); // 抖音/快手 cookies 配置
     document.getElementById('wiz-script-process-btn').addEventListener('click', wizardScriptProcess);
     document.getElementById('wiz-generate-btn').addEventListener('click', wizardGenerate);
     document.getElementById('wiz-prev-btn').addEventListener('click', () => wizardGoToStep(wizardState.currentStep - 1));
@@ -1141,6 +1145,71 @@ async function previewShareText() {
   }
 }
 
+// ============ 文案提取 Cookies 配置（抖音/快手反爬绕过） ============
+async function loadCookiesStatus() {
+  const statusEl = document.getElementById('wiz-cookies-status');
+  const deleteBtn = document.getElementById('wiz-cookies-delete');
+  if (!statusEl) return;
+  try {
+    const info = await api('/api/script/cookies');
+    if (info.configured && info.exists) {
+      statusEl.textContent = '✓ 已配置';
+      statusEl.classList.add('configured');
+      if (deleteBtn) deleteBtn.style.display = 'inline-flex';
+    } else if (info.configured && !info.exists) {
+      statusEl.textContent = '⚠ 文件丢失';
+      statusEl.classList.remove('configured');
+      if (deleteBtn) deleteBtn.style.display = 'inline-flex';
+    } else {
+      statusEl.textContent = '未配置';
+      statusEl.classList.remove('configured');
+      if (deleteBtn) deleteBtn.style.display = 'none';
+    }
+  } catch (e) {
+    statusEl.textContent = '查询失败';
+    statusEl.classList.remove('configured');
+  }
+}
+
+function bindCookiesConfig() {
+  const fileInput = document.getElementById('wiz-cookies-file');
+  const deleteBtn = document.getElementById('wiz-cookies-delete');
+  if (fileInput) {
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      const btn = fileInput.closest('.cookies-upload-btn');
+      if (btn) { btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none'; }
+      toast('cookies 上传中…', 'info');
+      try {
+        const result = await api('/api/script/cookies', { method: 'POST', body: formData });
+        toast(`cookies 上传成功（${result.size} bytes），yt-dlp 将自动使用`, 'success');
+        loadCookiesStatus();
+      } catch (err) {
+        toast(`cookies 上传失败: ${err.message}`, 'error');
+      } finally {
+        if (btn) { btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+        fileInput.value = '';
+      }
+    });
+  }
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('确定删除 cookies 文件？删除后抖音/快手可能无法下载视频音频。')) return;
+      try {
+        await api('/api/script/cookies', { method: 'DELETE' });
+        toast('cookies 已删除', 'info');
+        loadCookiesStatus();
+      } catch (err) {
+        toast(`删除失败: ${err.message}`, 'error');
+      }
+    });
+  }
+  loadCookiesStatus();
+}
+
 async function wizardExtractScript() {
   const refUrl = document.getElementById('wiz-ref-url').value.trim();
   if (!refUrl) { toast('请输入参考视频链接', 'error'); return; }
@@ -1157,8 +1226,13 @@ async function wizardExtractScript() {
       updateScriptStats(result.script);
       // 提取成功后自动切换到"手动输入"标签页，让用户看到提取的文案
       switchWizardScriptTab('manual');
-      const mockHint = result.mock ? '（Mock 模式：未配置 ASR，返回示例文案。配置 MiMo ASR 可提取真实文案）' : '';
-      toast(`文案提取成功${mockHint}`, 'success');
+      if (result.mock) {
+        toast('文案提取成功（Mock 模式：未配置 ASR，返回示例文案。配置 MiMo ASR 可提取真实文案）', 'success');
+      } else if (result.degraded) {
+        toast('⚠ 已降级提取：抖音/快手反爬导致无法下载视频音频，仅返回分享描述。请在下方配置 cookies 后重新提取', 'info');
+      } else {
+        toast('文案提取成功', 'success');
+      }
     } else {
       toast(`提取失败: ${result.error}`, 'error');
     }

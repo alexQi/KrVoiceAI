@@ -441,6 +441,18 @@ body::before {
   border-color: var(--border-strong);
 }
 
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
 .btn-danger {
   background: rgba(239, 68, 68, 0.15);
   color: var(--color-error);
@@ -3876,6 +3888,83 @@ input[type="color"]::-webkit-color-swatch {
   .preview-value#wiz-preview-url {
     font-size: 10px;
     word-break: break-all;
+  }
+}
+
+/* ---------- 文案提取 Cookies 配置区 ---------- */
+.cookies-config {
+  margin: 16px 0 4px;
+  padding: 14px 16px;
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cookies-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cookies-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cookies-status {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-warning);
+  white-space: nowrap;
+}
+
+.cookies-status.configured {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--color-success);
+}
+
+.cookies-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cookies-upload-btn {
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.cookies-upload-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.cookies-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 480px) {
+  .cookies-config {
+    padding: 12px;
+  }
+  .cookies-actions {
+    flex-direction: column;
+  }
+  .cookies-actions .btn {
+    width: 100%;
   }
 }
 

@@ -543,6 +543,7 @@ class KrVoiceAI:
                     "action": "extract",
                     "char_count": len(text),
                     "mock": is_mock,
+                    "degraded": getattr(extractor, "_last_extract_degraded", False),
                     "source_type": "video" if is_video else "article",
                 }
             except Exception as e:

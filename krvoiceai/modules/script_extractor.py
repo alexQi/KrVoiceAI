@@ -67,6 +67,8 @@ class ScriptExtractor(BaseModule):
         self.mimo_api_key = self.config.get("asr.api_key", "")
         self.mimo_model = self.config.get("asr.mimo_model", "mimo-v2.5-asr")
         self.timeout = self.config.get("asr.timeout", 120)
+        # yt-dlp cookies 文件路径（抖音/快手反爬必需，Netscape 格式 .txt）
+        self.cookies_file = self.config.get("asr.cookies_file", "")
 
     def setup(self) -> None:
         # yt-dlp 检测：优先命令行，其次 Python 模块
@@ -146,6 +148,8 @@ class ScriptExtractor(BaseModule):
         2. 视频链接（抖音/快手/B站/YouTube）：yt-dlp 下载音频 + ASR 转写
         3. 文章链接（腾讯新闻/微信公众号/新浪新闻等）：requests 抓取网页正文
         """
+        # === 降级标记（供调用方判断是否为降级文案，非真实 ASR 转写） ===
+        self._last_extract_degraded = False
         # === 优先检测本地文件 ===
         cleaned_input = video_url.strip().strip('"').strip("'")
         local_path = Path(cleaned_input)
@@ -175,6 +179,7 @@ class ScriptExtractor(BaseModule):
                         if desc:
                             self.logger.info(f"已从分享文本提取文案描述: {len(desc)} 字")
                             text = desc
+                            self._last_extract_degraded = True  # 标记降级（非真实 ASR 转写）
                         else:
                             # 没有分享文案，尝试文章提取
                             try:
@@ -192,6 +197,7 @@ class ScriptExtractor(BaseModule):
                 if desc:
                     self.logger.info(f"yt-dlp/ASR 不可用，使用分享文本文案描述: {len(desc)} 字")
                     text = desc
+                    self._last_extract_degraded = True  # 标记降级（非真实 ASR 转写）
                 else:
                     text = self._extract_mock(video_url)
         else:
@@ -452,7 +458,15 @@ class ScriptExtractor(BaseModule):
         """用 yt-dlp 下载音频，返回下载的文件路径
 
         优先使用 Python API（yt_dlp.YoutubeDL），失败则回退命令行。
+        若配置了 asr.cookies_file 且文件存在，自动传入 cookies 绕过抖音/快手反爬。
         """
+        # 检查 cookies 文件是否可用
+        cookies_path = Path(self.cookies_file) if self.cookies_file else None
+        use_cookies = bool(cookies_path and cookies_path.exists() and cookies_path.is_file())
+        if use_cookies:
+            self.logger.info(f"yt-dlp 使用 cookies: {cookies_path}")
+        else:
+            self.logger.info("yt-dlp 未配置 cookies（抖音/快手可能下载失败，请在设置中配置 asr.cookies_file）")
         # 方式 1：Python API
         try:
             import yt_dlp
@@ -471,6 +485,8 @@ class ScriptExtractor(BaseModule):
                     "preferredcodec": "mp3",
                 }],
             }
+            if use_cookies:
+                opts["cookiefile"] = str(cookies_path)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
             # 查找下载结果
@@ -490,6 +506,8 @@ class ScriptExtractor(BaseModule):
                 "-o", output_template,
                 "--no-playlist", "--no-warnings", url,
             ]
+            if use_cookies:
+                cmd.extend(["--cookies", str(cookies_path)])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode == 0:
                 work_dir = Path(output_template).parent
