@@ -558,7 +558,7 @@ class ScriptExtractor(BaseModule):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
-            self.logger.debug("Playwright 未安装，跳过无头浏览器方案")
+            self.logger.warning("Playwright 未安装，跳过无头浏览器方案。安装: pip install playwright")
             return "", ""
 
         # 先解析 aweme_id（用于直接访问分享页，避免短链超时）
@@ -580,16 +580,36 @@ class ScriptExtractor(BaseModule):
 
         try:
             with sync_playwright() as p:
-                try:
-                    browser = p.chromium.launch(channel="chrome", headless=True)
-                except Exception:
-                    browser = p.chromium.launch(headless=True)
+                # 尝试多个浏览器通道：系统已装的优先（Edge/Chrome），最后 Chromium
+                browser = None
+                launch_err = None
+                for _ch in ("msedge", "chrome"):
+                    try:
+                        browser = p.chromium.launch(channel=_ch, headless=True)
+                        self.logger.info(f"Playwright 浏览器: {_ch}")
+                        break
+                    except Exception as e:
+                        launch_err = e
+                if browser is None:
+                    try:
+                        browser = p.chromium.launch(headless=True)
+                        self.logger.info("Playwright 浏览器: chromium")
+                    except Exception as e:
+                        raise RuntimeError(f"无可用浏览器通道: {e}") from launch_err
 
                 context = browser.new_context(
                     user_agent=self._BROWSER_UA,
                     viewport={"width": 1920, "height": 1080},
                 )
                 page = context.new_page()
+
+                # 监听网络请求，捕获实际视频流 URL（douyinvod.com）
+                captured_video_urls = []
+                def _capture_video(response):
+                    u = response.url
+                    if "douyinvod.com" in u or "video/tos" in u:
+                        captured_video_urls.append(u)
+                page.on("response", _capture_video)
 
                 self.logger.info(f"Playwright 渲染: {share_url}")
                 try:
@@ -612,10 +632,15 @@ class ScriptExtractor(BaseModule):
                     desc = re.sub(r"\s*-\s*.*?于\d+.*?发布在抖音.*$", "", meta_desc).strip()
                     desc = re.sub(r"#[\w]+$", "", desc).strip()
 
-                # 提取视频 URL（从 video 标签的 currentSrc）
-                video_dl_url = page.evaluate(
-                    'document.querySelector("video")?.currentSrc || ""'
-                )
+                # 提取视频 URL：优先从网络请求捕获（douyinvod.com），其次从 video.currentSrc
+                video_dl_url = ""
+                if captured_video_urls:
+                    video_dl_url = captured_video_urls[0]
+                    self.logger.info(f"Playwright 捕获视频流: {len(captured_video_urls)} 个")
+                else:
+                    cur = page.evaluate('document.querySelector("video")?.currentSrc || ""')
+                    if cur and "douyinvod.com" in cur:
+                        video_dl_url = cur
 
                 # 尝试从 RENDER_DATA 提取 desc（如果 title/meta 不够）
                 if (not desc or len(desc) < 20) and video_dl_url:

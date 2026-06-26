@@ -29,6 +29,8 @@ dependencies = [
     "openai>=1.10",
     # 下载
     "yt-dlp>=2024.0",
+    # 无头浏览器（抖音文案提取，用系统已装的 Edge/Chrome，无需下载 Chromium）
+    "playwright>=1.40",
     # 界面
     "gradio>=4.0",
     # 任务
