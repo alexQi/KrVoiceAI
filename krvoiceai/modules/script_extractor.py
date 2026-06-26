@@ -292,15 +292,29 @@ class ScriptExtractor(BaseModule):
         model_size = whisper_cfg.get("model_size", "small")
         device = whisper_cfg.get("device", "cpu")
         compute_type = whisper_cfg.get("compute_type", "int8")
+        beam_size = whisper_cfg.get("beam_size", 5)
+        # 热词：提示 whisper 关注特定词汇，减少专有名词/术语识别错误
+        hotwords = whisper_cfg.get("hotwords", "")
+        download_root = whisper_cfg.get("download_root", "") or None
 
         self.logger.info(
-            f"faster-whisper 本地转写: {audio_path.name} model={model_size}"
+            f"faster-whisper 本地转写: {audio_path.name} model={model_size} beam={beam_size}"
         )
-        model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        # initial_prompt 引导 whisper 输出简体中文 + 标点（默认 small 模型倾向繁体）
+        model = WhisperModel(
+            model_size, device=device, compute_type=compute_type,
+            download_root=download_root,
+        )
+        # initial_prompt 引导 whisper 输出简体中文 + 标点 + 热词（默认 small 模型倾向繁体）
+        prompt = "以下是普通话的句子，使用简体中文和正确的标点符号。"
+        if hotwords:
+            prompt += f" 关键词：{hotwords}"
         segments, _ = model.transcribe(
             str(audio_path), language="zh", vad_filter=True,
-            initial_prompt="以下是普通话的句子，使用简体中文和正确的标点符号。",
+            beam_size=beam_size,
+            initial_prompt=prompt,
+            condition_on_previous_text=False,  # 避免幻觉扩散
+            no_speech_threshold=0.6,            # 静音过滤阈值
+            compression_ratio_threshold=2.4,   # 压缩比阈值（防乱码）
         )
         text = "".join(seg.text for seg in segments).strip()
         self.logger.info(f"转写完成: {len(text)} 字, 预览: {text[:80]}")
@@ -567,12 +581,11 @@ class ScriptExtractor(BaseModule):
         aweme_id = ""
         try:
             headers = {"User-Agent": self._BROWSER_UA}
-            r = httpx.get(url, headers=headers, timeout=10, follow_redirects=False)
-            if r.status_code in (301, 302, 303, 307, 308):
-                loc = r.headers.get("location", "")
-                am = re.search(r"/video/(\d+)", loc)
-                if am:
-                    aweme_id = am.group(1)
+            # follow_redirects=True 跟随短链重定向，从最终 URL 提取 aweme_id
+            r = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+            am = re.search(r"/video/(\d+)", str(r.url))
+            if am:
+                aweme_id = am.group(1)
         except Exception:
             pass
 
