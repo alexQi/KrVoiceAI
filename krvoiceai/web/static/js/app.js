@@ -1011,6 +1011,8 @@ function bindScriptToolbar() {
   });
   const analyzeBtn = document.getElementById('wiz-analyze-btn');
   if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeViralScript);
+  const previewTtsBtn = document.getElementById('wiz-preview-tts-btn');
+  if (previewTtsBtn) previewTtsBtn.addEventListener('click', previewScriptTts);
   const viralCloseBtn = document.getElementById('wiz-viral-close');
   if (viralCloseBtn) viralCloseBtn.addEventListener('click', () => {
     document.getElementById('wiz-viral-analysis').style.display = 'none';
@@ -1357,6 +1359,57 @@ function switchWizardScriptTab(tabName) {
   document.querySelectorAll('.sub-page').forEach(p => p.classList.remove('active'));
   const target = document.getElementById(`wiz-script-${tabName}`);
   if (target) target.classList.add('active');
+}
+
+// 文案试听：合成并播放文案片段
+let _scriptPreviewAudio = null;
+async function previewScriptTts() {
+  const textarea = document.getElementById('wiz-script');
+  const script = textarea.value.trim();
+  if (!script) { toast('请先输入文案', 'error'); return; }
+  // 优先使用选中文本，否则用前 200 字
+  const selected = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd).trim();
+  const text = selected || script;
+  const voiceId = document.getElementById('wiz-avatar')?.value || 'default';
+  // 复用全局音频控制器
+  if (_scriptPreviewAudio && !_scriptPreviewAudio.paused) {
+    _scriptPreviewAudio.pause();
+    _scriptPreviewAudio = null;
+    setBtnIcon(document.getElementById('wiz-preview-tts-btn'), 'headphones', '试听');
+    return;
+  }
+  const btn = document.getElementById('wiz-preview-tts-btn');
+  btn.disabled = true;
+  setBtnIcon(btn, 'loader', '合成中...');
+  try {
+    const result = await api('/api/preview/tts', {
+      method: 'POST',
+      body: { text, voice_id: voiceId },
+    });
+    if (result.success && result.audio_path) {
+      const audio = new Audio(`/api/files?path=${encodeURIComponent(result.audio_path)}`);
+      _scriptPreviewAudio = audio;
+      setBtnIcon(btn, 'pause', '停止');
+      audio.addEventListener('ended', () => {
+        _scriptPreviewAudio = null;
+        setBtnIcon(btn, 'headphones', '试听');
+      });
+      audio.addEventListener('error', () => {
+        _scriptPreviewAudio = null;
+        setBtnIcon(btn, 'headphones', '试听');
+        toast('音频播放失败', 'error');
+      });
+      await audio.play();
+      toast(`试听播放中${selected ? '（选中文本）' : '（前' + Math.min(200, script.length) + '字）'}，时长 ${result.duration}s`, 'info');
+    } else {
+      toast(`试听失败: ${result.error}`, 'error');
+    }
+  } catch (e) {
+    toast(`试听失败: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    if (!_scriptPreviewAudio) setBtnIcon(btn, 'headphones', '试听');
+  }
 }
 
 // 爆款结构分析

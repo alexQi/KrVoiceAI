@@ -721,6 +721,29 @@ def create_app() -> FastAPI:
             None, lambda: get_settings_manager().test_avatar(req.model_dump())
         )
 
+    # ============ 文案试听 API ============
+
+    @app.post("/api/preview/tts")
+    async def preview_tts(req: dict):
+        """文案试听：合成任意文本片段，返回音频文件路径
+
+        用于文案编辑区实时试听，支持选中文本或全文前 150 字。
+        """
+        krvoice = _get_app()
+        text = (req.get("text") or "").strip()
+        voice_id = req.get("voice_id", "default")
+        if not text:
+            return {"success": False, "error": "无文案可试听"}
+        # 限制试听长度（避免长时间等待）
+        if len(text) > 200:
+            text = text[:200]
+            logger.info(f"文案试听：截断到 200 字")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: krvoice.preview_tts(text, voice_id)
+        )
+        return result
+
     # ============ 文案 AI 处理 API ============
 
     @app.post("/api/script/process")
