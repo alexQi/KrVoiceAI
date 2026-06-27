@@ -382,12 +382,18 @@ class KrVoiceAI:
         except Exception as e:
             return {"success": False, "data": {}, "error": str(e)}
 
-    def preview_tts(self, text: str, voice_id: str = "default") -> dict:
+    def preview_tts(self, text: str, voice_id: str = "default",
+                    speed: Optional[float] = None, volume: Optional[int] = None,
+                    pitch: Optional[int] = None, emotion: Optional[str] = None) -> dict:
         """试听/预览合成（provider 无关，不经过流水线，供 UI 试听按钮调用）
 
         Args:
             text: 要试听的文案片段
             voice_id: 音色 ID（default 或已注册音色）
+            speed: 语速倍率（0.5-2.0），None 用引擎默认
+            volume: 音量百分比（0-200），None 用引擎默认
+            pitch: 音高半音（-12 到 +12），None 用引擎默认
+            emotion: 情感标签，None 用引擎默认
 
         Returns:
             {"success": bool, "audio_path": str|None, "duration": float, "error": str|None}
@@ -404,7 +410,10 @@ class KrVoiceAI:
                         "error": "TTS 引擎未初始化"}
             persist = Path("output") / f"voice_preview_{int(_time.time())}.wav"
             persist.parent.mkdir(parents=True, exist_ok=True)
-            audio_path, duration, _ = engine.synthesize(text, voice_id, persist)
+            audio_path, duration, _ = engine.synthesize(
+                text, voice_id, persist,
+                speed=speed, volume=volume, pitch=pitch, emotion=emotion,
+            )
             # synthesize 可能输出到 persist，也可能输出到别处（如 moss 的 16k 转换）
             final = str(audio_path) if audio_path.exists() else str(persist)
             if Path(final) != persist and persist.exists():

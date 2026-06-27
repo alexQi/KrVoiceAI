@@ -728,7 +728,8 @@ def create_app() -> FastAPI:
     async def preview_tts(req: dict):
         """文案试听：合成任意文本片段，返回音频文件路径
 
-        用于文案编辑区实时试听，支持选中文本或全文前 150 字。
+        用于文案编辑区实时试听，支持选中文本或全文前 200 字。
+        可选传入 speed/volume/pitch/emotion 实时预览不同语音效果。
         """
         krvoice = _get_app()
         text = (req.get("text") or "").strip()
@@ -739,9 +740,31 @@ def create_app() -> FastAPI:
         if len(text) > 200:
             text = text[:200]
             logger.info(f"文案试听：截断到 200 字")
+        # 可选音频参数（语速/音量/音高/情感）
+        speed = req.get("speed")
+        volume = req.get("volume")
+        pitch = req.get("pitch")
+        emotion = req.get("emotion")
+        # 类型转换
+        try:
+            speed = float(speed) if speed is not None else None
+        except (TypeError, ValueError):
+            speed = None
+        try:
+            volume = int(volume) if volume is not None else None
+        except (TypeError, ValueError):
+            volume = None
+        try:
+            pitch = int(pitch) if pitch is not None else None
+        except (TypeError, ValueError):
+            pitch = None
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, lambda: krvoice.preview_tts(text, voice_id)
+            None,
+            lambda: krvoice.preview_tts(
+                text, voice_id, speed=speed, volume=volume,
+                pitch=pitch, emotion=emotion,
+            ),
         )
         return result
 

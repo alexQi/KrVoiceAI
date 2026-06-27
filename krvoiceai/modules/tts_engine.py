@@ -73,33 +73,56 @@ class TTSEngine(BaseModule):
         voice_id = ctx.voice_id or self.default_voice
         output_path = ctx.work_dir / "tts_output.wav"
 
+        # 从 audio 配置段读取语速/音量/音高/情感（UI 持久化到此）
+        audio_cfg = self.config.get("audio", {}) or {}
+        speed = audio_cfg.get("speed")
+        volume = audio_cfg.get("volume")
+        pitch = audio_cfg.get("pitch")
+        emotion = audio_cfg.get("emotion")
+        # 类型转换与边界保护
+        try:
+            speed = float(speed) if speed is not None else None
+        except (TypeError, ValueError):
+            speed = None
+        try:
+            volume = int(volume) if volume is not None else None
+        except (TypeError, ValueError):
+            volume = None
+        try:
+            pitch = int(pitch) if pitch is not None else None
+        except (TypeError, ValueError):
+            pitch = None
+
         try:
             start = time.time()
             if self.provider == "moss_nano":
                 audio_path, duration, timestamps = self._synth_moss_nano(
-                    text, voice_id, output_path
+                    text, voice_id, output_path, speed, volume, pitch, emotion
                 )
             elif self.provider == "mimo":
                 audio_path, duration, timestamps = self._synth_mimo(
-                    text, voice_id, output_path
+                    text, voice_id, output_path, speed, volume, pitch, emotion
                 )
             elif self.provider == "gpt_sovits":
                 audio_path, duration, timestamps = self._synth_gpt_sovits(
-                    text, voice_id, output_path
+                    text, voice_id, output_path, speed, volume, pitch, emotion
                 )
             elif self.provider == "edge_tts":
                 audio_path, duration, timestamps = self._synth_edge(
-                    text, voice_id, output_path
+                    text, voice_id, output_path, speed, volume, pitch, emotion
                 )
             else:
                 audio_path, duration, timestamps = self._synth_mock(
-                    text, voice_id, output_path
+                    text, voice_id, output_path, speed, volume, pitch, emotion
                 )
 
             ctx.audio_path = audio_path
             ctx.audio_duration = duration
             ctx.metadata["tts_timestamps"] = timestamps
             ctx.metadata["tts_provider"] = self.provider
+            ctx.metadata["tts_audio_opts"] = {
+                "speed": speed, "volume": volume, "pitch": pitch, "emotion": emotion,
+            }
 
             return ModuleResult(
                 success=True,
@@ -109,13 +132,17 @@ class TTSEngine(BaseModule):
                     "voice_id": voice_id,
                     "provider": self.provider,
                     "segments": len(timestamps),
+                    "speed": speed,
+                    "emotion": emotion,
                 },
             )
         except Exception as e:
             return ModuleResult(success=False, error=str(e))
 
     def synthesize(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
         """公共合成方法（provider 无关，供 UI 试听/预览使用，无需构造 JobContext）
 
@@ -126,22 +153,28 @@ class TTSEngine(BaseModule):
             text: 要合成的文案
             voice_id: 音色 ID（default 或已注册音色）
             output_path: 输出 wav 路径
+            speed: 语速倍率（0.5-2.0，1.0 为正常），None 时用引擎默认
+            volume: 音量百分比（0-200，100 为正常），None 时用引擎默认
+            pitch: 音高半音偏移（-12 到 +12，0 为正常），None 时用引擎默认
+            emotion: 情感标签（neutral/calm/excited/gentle/serious/cheerful），
+                     目前仅记录到 metadata，由支持情感的 provider 使用
 
         Returns:
             (audio_path: Path, duration: float, timestamps: list[dict])
         """
         if not text or not text.strip():
             raise ValueError("无文案可合成")
+        audio_opts = {"speed": speed, "volume": volume, "pitch": pitch, "emotion": emotion}
         if self.provider == "moss_nano":
-            return self._synth_moss_nano(text, voice_id, output_path)
+            return self._synth_moss_nano(text, voice_id, output_path, **audio_opts)
         elif self.provider == "mimo":
-            return self._synth_mimo(text, voice_id, output_path)
+            return self._synth_mimo(text, voice_id, output_path, **audio_opts)
         elif self.provider == "gpt_sovits":
-            return self._synth_gpt_sovits(text, voice_id, output_path)
+            return self._synth_gpt_sovits(text, voice_id, output_path, **audio_opts)
         elif self.provider == "edge_tts":
-            return self._synth_edge(text, voice_id, output_path)
+            return self._synth_edge(text, voice_id, output_path, **audio_opts)
         else:
-            return self._synth_mock(text, voice_id, output_path)
+            return self._synth_mock(text, voice_id, output_path, **audio_opts)
 
     def _get_moss_runtime(self):
         """懒加载 MOSS-TTS-Nano ONNX 运行时（仅依赖 onnxruntime + soundfile + sentencepiece）"""
@@ -204,7 +237,9 @@ class TTSEngine(BaseModule):
         return self._moss_runtime
 
     def _synth_moss_nano(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
         """使用本地 MOSS-TTS-Nano ONNX 合成（支持声音克隆）
 
@@ -298,7 +333,9 @@ class TTSEngine(BaseModule):
         return final_path, duration, timestamps
 
     def _synth_mimo(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
         """调用小米 MiMo TTS API（OpenAI 兼容 chat/completions 端点）
 
@@ -391,10 +428,12 @@ class TTSEngine(BaseModule):
         return final_path, duration, timestamps
 
     def _synth_gpt_sovits(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
         """调用 GPT-SoVITS 云端 API"""
-        self.logger.info(f"GPT-SoVITS 合成 voice={voice_id} text_len={len(text)}")
+        self.logger.info(f"GPT-SoVITS 合成 voice={voice_id} text_len={len(text)} speed={speed}")
 
         # 分句合成，便于时间戳对齐
         segments = split_text_to_segments(text)
@@ -402,12 +441,14 @@ class TTSEngine(BaseModule):
         combined_audio = bytearray()
         sample_rate = 32000
         offset = 0.0
+        # 语速：默认 1.0，支持外部传入精细控制
+        tts_speed = speed if speed is not None else 1.0
 
         for seg in segments:
             payload = {
                 "text": seg,
                 "voice_id": voice_id,
-                "speed": 1.0,
+                "speed": tts_speed,
             }
             resp = self.gpu.call_tts(payload)
             # 假设返回 base64 编码的 wav
@@ -436,19 +477,44 @@ class TTSEngine(BaseModule):
         return output_path, duration, timestamps
 
     def _synth_edge(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
-        """使用 edge-tts 合成（标准音色，无克隆）"""
+        """使用 edge-tts 合成（标准音色，无克隆）
+
+        支持语速/音量/音高精细控制（edge-tts 库原生能力）：
+        - speed: 0.5-2.0 倍率 → edge-tts rate "±N%"
+        - volume: 0-200 百分比 → edge-tts volume "±N%"
+        - pitch: -12 到 +12 半音 → edge-tts pitch "±NHz"（每半音约 4Hz）
+        """
         try:
             import edge_tts
         except ImportError as e:
             self.logger.warning("edge-tts 未安装，降级到 mock")
             return self._synth_mock(text, voice_id, output_path)
 
-        self.logger.info(f"edge-tts 合成 voice={self.edge_voice}")
+        # 构造 edge-tts 的 rate/volume/pitch 参数字符串
+        kwargs: dict = {}
+        if speed is not None and abs(speed - 1.0) > 0.01:
+            rate_pct = int(round((speed - 1.0) * 100))
+            kwargs["rate"] = f"{rate_pct:+d}%"
+        if volume is not None and volume != 100:
+            vol_pct = volume - 100
+            kwargs["volume"] = f"{vol_pct:+d}%"
+        if pitch is not None and pitch != 0:
+            # 半音 → Hz 近似转换（每半音约 4Hz）
+            pitch_hz = pitch * 4
+            kwargs["pitch"] = f"{pitch_hz:+d}Hz"
+
+        self.logger.info(
+            f"edge-tts 合成 voice={self.edge_voice} "
+            f"speed={speed} volume={volume} pitch={pitch} "
+            f"kwargs={kwargs}"
+        )
 
         async def _synth():
-            communicate = edge_tts.Communicate(text, self.edge_voice)
+            communicate = edge_tts.Communicate(text, self.edge_voice, **kwargs)
             await communicate.save(str(output_path))
 
         asyncio.run(_synth())
@@ -470,7 +536,9 @@ class TTSEngine(BaseModule):
         return output_path, duration, timestamps
 
     def _synth_mock(
-        self, text: str, voice_id: str, output_path: Path
+        self, text: str, voice_id: str, output_path: Path,
+        speed: float | None = None, volume: int | None = None,
+        pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
         """Mock 模式：生成静音 wav，时长按文本估算"""
         duration = estimate_speech_duration(text)

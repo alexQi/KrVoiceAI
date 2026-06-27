@@ -1470,6 +1470,17 @@ async function previewScriptTts() {
   const selected = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd).trim();
   const text = selected || script;
   const voiceId = document.getElementById('wiz-avatar')?.value || 'default';
+  // 采集当前语音设置（向导步骤4的滑块，若存在）
+  const speedEl = document.getElementById('wiz-speed');
+  const volumeEl = document.getElementById('wiz-volume');
+  const pitchEl = document.getElementById('wiz-pitch');
+  const emotionVal = typeof getBtnCardValue === 'function'
+    ? (getBtnCardValue('wiz-emotion-grid') || 'neutral') : 'neutral';
+  const audioBody = { text, voice_id: voiceId };
+  if (speedEl) audioBody.speed = parseFloat(speedEl.value);
+  if (volumeEl) audioBody.volume = parseInt(volumeEl.value);
+  if (pitchEl) audioBody.pitch = parseInt(pitchEl.value);
+  audioBody.emotion = emotionVal;
   // 复用全局音频控制器
   if (_scriptPreviewAudio && !_scriptPreviewAudio.paused) {
     _scriptPreviewAudio.pause();
@@ -1483,7 +1494,7 @@ async function previewScriptTts() {
   try {
     const result = await api('/api/preview/tts', {
       method: 'POST',
-      body: { text, voice_id: voiceId },
+      body: audioBody,
     });
     if (result.success && result.audio_path) {
       const audio = new Audio(`/api/files?path=${encodeURIComponent(result.audio_path)}`);
