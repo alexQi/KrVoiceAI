@@ -1023,22 +1023,67 @@ function bindScriptToolbar() {
 async function wizardScriptQuickProcess(action, style) {
   const script = document.getElementById('wiz-script').value.trim();
   if (!script) { toast('请先输入文案', 'error'); return; }
-  toast(`正在执行 AI ${action === 'polish' ? '润色' : action === 'expand' ? '扩写' : '缩写'}...`, 'info');
+  const actionLabel = {polish:'润色',expand:'扩写',shorten:'缩写'}[action] || action;
+  toast(`正在执行 AI ${actionLabel}...`, 'info');
   try {
     const result = await api('/api/script/process', {
       method: 'POST',
       body: { script, action, style },
     });
     if (result.success) {
-      document.getElementById('wiz-script').value = result.script;
-      updateScriptStats(result.script);
-      toast(`处理成功${result.mock ? '（Mock 模式）' : ''}`, 'success');
+      showScriptDiff(script, result.script, actionLabel, result.mock);
     } else {
       toast(`处理失败: ${result.error}`, 'error');
     }
   } catch (e) {
     toast(`处理失败: ${e.message}`, 'error');
   }
+}
+
+// 文案对比视图：显示原文 vs 修改后，让用户选择接受或取消
+function showScriptDiff(original, modified, actionLabel, isMock) {
+  const panel = document.getElementById('wiz-viral-analysis');
+  const body = document.getElementById('wiz-viral-body');
+  if (!panel || !body) {
+    // 降级：直接替换
+    document.getElementById('wiz-script').value = modified;
+    updateScriptStats(modified);
+    toast(`处理成功${isMock ? '（Mock 模式）' : ''}`, 'success');
+    return;
+  }
+  panel.style.display = 'block';
+  document.querySelector('.viral-analysis-title').innerHTML = `<i data-lucide="git-compare"></i> AI${actionLabel}对比`;
+  const origLines = original.split('\n');
+  const modLines = modified.split('\n');
+  body.innerHTML = `
+    <div class="script-diff-toolbar">
+      <span class="script-diff-info">原文 ${origLines.length} 行 / 修改后 ${modLines.length} 行</span>
+      <div class="script-diff-actions">
+        <button class="btn btn-sm btn-ghost" id="diff-cancel" type="button"><i data-lucide="x"></i> 取消</button>
+        <button class="btn btn-sm btn-primary" id="diff-accept" type="button"><i data-lucide="check"></i> 接受修改</button>
+      </div>
+    </div>
+    <div class="script-diff-grid">
+      <div class="script-diff-col">
+        <div class="script-diff-col-head">原文</div>
+        <div class="script-diff-content">${escapeHtml(original)}</div>
+      </div>
+      <div class="script-diff-col">
+        <div class="script-diff-col-head script-diff-modified">修改后${isMock ? '（Mock）' : ''}</div>
+        <div class="script-diff-content">${escapeHtml(modified)}</div>
+      </div>
+    </div>`;
+  lucide.createIcons();
+  document.getElementById('diff-accept').addEventListener('click', () => {
+    document.getElementById('wiz-script').value = modified;
+    updateScriptStats(modified);
+    panel.style.display = 'none';
+    toast(`已接受 AI${actionLabel}结果`, 'success');
+  });
+  document.getElementById('diff-cancel').addEventListener('click', () => {
+    panel.style.display = 'none';
+    toast('已取消修改', 'info');
+  });
 }
 
 function renderWizardStepper() {
