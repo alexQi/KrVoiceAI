@@ -1839,13 +1839,13 @@ async function pollGenerateJob(payload) {
 
   // 3. 轮询任务状态
   const wizPipeline = document.getElementById('wiz-pipeline');
-  const maxWait = 600000; // 最长等待 10 分钟
+  const maxWait = 3600000; // 最长等待 60 分钟（CPU 模式下 wav2lip 数字人合成可能耗时 20-30 分钟）
   const pollInterval = 1500;
   const t0 = Date.now();
 
   while (true) {
     if (Date.now() - t0 > maxWait) {
-      throw new Error('生成超时（超过 10 分钟），请稍后重试或减少文案长度');
+      throw new Error('生成超时（超过 60 分钟），可能是数字人合成在 CPU 模式下耗时过长，建议减少文案长度或使用 GPU 服务器');
     }
     await new Promise(r => setTimeout(r, pollInterval));
 

@@ -506,17 +506,23 @@ class VideoComposer(BaseModule):
 
         # 拼接封面 + 原视频
         # 先确保原视频参数一致（重新编码为统一参数）
+        # 注意：wav2lip 输出的 avatar 视频可能没有音频流，需补静音轨，否则 concat 时 [1:a] 找不到流
         normalized_video = work_dir / "_tmp_main_normalized.mp4"
         args = [
             "-i", str(video),
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
             "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={self.output_fps},format=yuv420p",
+            "-map", "0:v:0",
+            "-map", "1:a:0",  # 静音音频轨（与视频时长对齐）
             "-c:v", "libx264",
             "-preset", "medium",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", self.audio_bitrate,
             "-r", str(self.output_fps),
+            "-shortest",
             str(normalized_video),
         ]
         self.ffmpeg.run(args)
@@ -569,15 +575,20 @@ class VideoComposer(BaseModule):
     ) -> Path:
         """拼接片头+主视频+片尾"""
         w, h = self.output_resolution
-        # 先统一主视频参数
+        # 先统一主视频参数（补静音音频轨，避免无音频流时 concat 失败）
         normalized = work_dir / "_tmp_main_for_concat.mp4"
         args = [
             "-i", str(main_video),
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
             "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={self.output_fps},format=yuv420p",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", self.audio_bitrate,
             "-r", str(self.output_fps),
+            "-shortest",
             str(normalized),
         ]
         self.ffmpeg.run(args)
