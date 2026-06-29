@@ -129,7 +129,7 @@ class AvatarEngine(BaseModule):
                 [str(env_python), "-c",
                  "import torch, librosa, cv2, numpy, scipy; "
                  "print('deps ok', torch.__version__)"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=120,
             )
             if result.returncode != 0:
                 return False, (
@@ -271,7 +271,7 @@ class AvatarEngine(BaseModule):
             cmd,
             capture_output=True,
             text=True,
-            timeout=3600,  # 60分钟超时（长视频 CPU 模式可能很久）
+            timeout=7200,  # 120分钟超时（resize_factor=1 CPU 模式长视频可能超过 60 分钟）
             cwd=str(wav2lip_root),
         )
 
