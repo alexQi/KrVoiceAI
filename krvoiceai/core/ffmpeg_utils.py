@@ -795,9 +795,10 @@ class FFmpegRunner:
             except Exception:
                 pass
             # 加静音音频轨（确保输出一定有音频流，供后续 concat）
+            # 注意：anullsrc 无限长，靠 -shortest 截断到视频时长，不能加 -t 限制
             args_silent = [
                 "-i", str(video),
-                "-f", "lavfi", "-t", "1", "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=44100",
                 "-filter_complex", vf,
                 "-map", "[v]", "-map", "1:a",
                 "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
