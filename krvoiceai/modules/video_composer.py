@@ -232,18 +232,34 @@ class VideoComposer(BaseModule):
             inputs += ["-i", str(voice_audio)]
             voice_input_idx = len(inputs) // 2 - 1  # 刚加的输入索引
 
+        # 音视频同步：如果视频开头插入了封面（_prepend_cover 固定 1.5s）或片头，
+        # TTS 人声必须加等量静音延迟，否则声音会比嘴型提前播放（封面段视频静音，但音频已开始）
+        cover_delay_ms = 0
+        if cover and Path(cover).exists():
+            cover_delay_ms = 1500  # _prepend_cover 固定 1.5 秒封面
+        if self.intro_enabled and self.intro_text:
+            cover_delay_ms += int(self.intro_duration * 1000)  # 加片头时长
+
+        # 构建人声滤镜链（含延迟补偿）
+        def _voice_chain(out_label: str) -> str:
+            chain = f"[{voice_input_idx}:a]volume=1.0"
+            if cover_delay_ms > 0:
+                chain += f",adelay={cover_delay_ms}|{cover_delay_ms}"
+            chain += f"[{out_label}]"
+            return chain
+
         if bgm and Path(bgm).exists():
             inputs += ["-i", str(bgm)]
             bgm_input_idx = len(inputs) // 2 - 1
-            # 人声(TTS) + BGM 混音
+            # 人声(TTS,含封面延迟) + BGM 混音
             audio_filter = (
-                f"[{voice_input_idx}:a]volume=1.0[voice];"
+                _voice_chain("voice") + ";"
                 f"[{bgm_input_idx}:a]volume={self.bgm_volume}[bgm];"
                 f"[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
             )
         elif voice_audio and Path(voice_audio).exists():
-            # 只有人声，无 BGM
-            audio_filter = f"[{voice_input_idx}:a]volume=1.0[aout]"
+            # 只有人声，无 BGM（含封面延迟补偿）
+            audio_filter = _voice_chain("aout")
 
         # 构建命令
         args = list(inputs)
