@@ -95,7 +95,7 @@
       <div class="sidebar-header">
         <div class="logo">
           <div class="logo-icon"><i data-lucide="film"></i></div>
-          <div class="logo-text">Kr<span>VoiceAI</span></div>
+          <div class="logo-text">Enly<span>AI</span></div>
         </div>
       </div>
 
@@ -600,6 +600,71 @@
             </div>
           </div>
 
+          <!-- B-roll 画中画（对标旗博士） -->
+          <div class="card" id="wiz-broll-card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-title-icon"><i data-lucide="layers"></i></span>
+                画中画 / B-roll
+                <span class="hint" style="margin-left:8px;font-size:12px;color:var(--text-tertiary)">在字幕时间段插入插播素材</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-sm btn-secondary" id="wiz-broll-smart-btn" onclick="wizardBrollSuggest()">
+                  <i data-lucide="sparkles" style="width:14px;height:14px"></i> 智能推荐
+                </button>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="wiz-broll-enabled" onchange="toggleWizardBroll()">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div id="wiz-broll-group" style="display:none">
+              <!-- 素材库 + 上传 -->
+              <div class="form-row" style="align-items:flex-start">
+                <div class="form-group" style="flex:1">
+                  <label class="form-label">B-roll 素材库</label>
+                  <div class="upload-zone" style="padding:12px;margin-bottom:8px" onclick="document.getElementById('wiz-broll-upload').click()">
+                    <i data-lucide="upload-cloud" style="width:20px;height:20px;color:var(--text-tertiary)"></i>
+                    <span style="font-size:13px;color:var(--text-secondary);margin-left:6px">上传视频/图片</span>
+                    <input type="file" id="wiz-broll-upload" accept="video/*,image/*" style="display:none" onchange="onWizardBrollUpload(this)">
+                  </div>
+                  <div id="wiz-broll-list" style="max-height:200px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:8px"></div>
+                </div>
+                <div class="form-group" style="flex:1">
+                  <label class="form-label">已添加片段</label>
+                  <div id="wiz-broll-clips" style="max-height:200px;overflow-y:auto"></div>
+                </div>
+              </div>
+
+              <!-- 字幕时间轴（对标旗博士：可视化字幕时间段+B-roll插入点） -->
+              <div class="form-group">
+                <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
+                  <span>字幕时间轴 <span class="hint" style="font-size:11px">点击字幕间的 + 插入 B-roll</span></span>
+                  <button class="btn btn-sm btn-text" onclick="clearWizardBrollClips()">清空</button>
+                </label>
+                <div class="timeline-container" id="wiz-timeline" style="max-height:280px;overflow-y:auto">
+                  <div class="timeline-ruler" id="wiz-ruler"></div>
+                  <div class="timeline-track">
+                    <div class="timeline-track-label">B-roll</div>
+                    <div class="timeline-track-content" id="wiz-broll-track"></div>
+                  </div>
+                  <div class="timeline-track">
+                    <div class="timeline-track-label">字幕</div>
+                    <div class="timeline-track-content" id="wiz-subtitle-track"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 模式说明 -->
+              <div style="padding:10px 14px;background:var(--bg-vibrant);border-radius:var(--radius-sm);font-size:12px;color:var(--text-secondary);line-height:1.6">
+                <strong style="color:var(--text-primary)">使用说明：</strong>
+                ① 上传素材或点击"智能推荐"获取 B-roll 素材；<br>
+                ② 点击字幕间的 <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;background:var(--color-primary);color:#fff;border-radius:50%;font-size:12px;vertical-align:middle">+</span> 在两段字幕之间插入；<br>
+                ③ 点击 B-roll 轨道空白处可在任意位置插入；<br>
+                ④ <strong>画中画(PIP)</strong>：素材叠加在数字人上；<strong>整段切换(CUT)</strong>：替换主画面。
+              </div>
+            </div>
+          </div>
           <div class="card">
             <div class="card-header">
               <div class="card-title"><span class="card-title-icon"><i data-lucide="film"></i></span> 视频效果</div>

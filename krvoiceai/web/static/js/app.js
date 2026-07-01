@@ -1995,6 +1995,7 @@ async function wizardGenerate() {
       script, reference_video_url: refUrl || null,
       avatar_id: avatar, voice_id: voice,
       script_mode: 'polish', platform, auto_publish: autoPublish,
+      broll_clips: getWizardBrollClips(),
     });
 
     // 展示结果（向导页内）
@@ -4232,4 +4233,356 @@ async function confirmQuickEdit() {
     btn.disabled = false;
     btn.innerHTML = '应用';
   }
+}
+
+// ========== 创作向导 B-roll 集成 ==========
+let wizBrollState = {
+  assets: [],        // 素材库
+  clips: [],         // 已添加片段
+  selectedAsset: null,
+  duration: 60,      // 默认时长（生成后会更新）
+  subtitleSegments: []  // 字幕时间段
+};
+
+// 开关 B-roll 面板
+function toggleWizardBroll() {
+  const enabled = document.getElementById('wiz-broll-enabled').checked;
+  document.getElementById('wiz-broll-group').style.display = enabled ? 'block' : 'none';
+  if (enabled) {
+    loadWizardBrollAssets();
+    renderWizardTimeline();
+  }
+}
+
+// 加载 B-roll 素材库
+async function loadWizardBrollAssets() {
+  try {
+    const assets = await api('/api/broll/assets');
+    wizBrollState.assets = assets || [];
+  } catch (e) {
+    wizBrollState.assets = [];
+  }
+  renderWizardBrollList();
+}
+
+// 渲染素材列表
+function renderWizardBrollList() {
+  const list = document.getElementById('wiz-broll-list');
+  if (!list) return;
+  if (!wizBrollState.assets.length) {
+    list.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px;padding:12px;text-align:center;width:100%">暂无素材，请上传</div>';
+    return;
+  }
+  list.innerHTML = wizBrollState.assets.map(a => {
+    const sizeStr = a.size > 1024*1024 ? (a.size/1024/1024).toFixed(1)+'MB' : Math.max(1,Math.round(a.size/1024))+'KB';
+    const isVideo = a.kind === 'video';
+    const thumb = isVideo
+      ? `<video src="/api/broll/assets/${encodeURIComponent(a.filename)}" muted preload="metadata"></video>`
+      : `<img src="/api/broll/assets/${encodeURIComponent(a.filename)}" onerror="this.style.display='none'">`;
+    return `
+      <div class="broll-asset-card ${wizBrollState.selectedAsset?.path === a.path ? 'selected' : ''}"
+           style="width:calc(50% - 4px);cursor:pointer"
+           onclick="selectWizardBrollAsset('${a.path.replace(/\\/g,'\\\\')}')">
+        <div class="broll-asset-thumb">${thumb}</div>
+        <div class="broll-asset-info">
+          <div class="broll-asset-name" style="font-size:11px">${a.filename}</div>
+          <div class="broll-asset-meta">${a.kind === 'video' ? '视频' : '图片'} · ${sizeStr}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// 选择素材
+function selectWizardBrollAsset(path) {
+  wizBrollState.selectedAsset = wizBrollState.assets.find(a => a.path.replace(/\\/g,'\\\\') === path || a.path === path);
+  renderWizardBrollList();
+  toast('已选择素材：' + (wizBrollState.selectedAsset?.filename || ''), 'info');
+}
+
+// 上传 B-roll 素材
+async function onWizardBrollUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('上传中...', 'info');
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const resp = await fetch('/api/broll/upload', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (data.success) {
+      toast('上传成功：' + data.filename, 'success');
+      await loadWizardBrollAssets();
+    } else {
+      toast('上传失败', 'error');
+    }
+  } catch (e) {
+    toast('上传失败：' + e.message, 'error');
+  }
+  input.value = '';
+}
+
+// 智能推荐 B-roll
+async function wizardBrollSuggest() {
+  const script = document.getElementById('wizard-script')?.value || document.getElementById('wiz-script')?.value || '';
+  if (!script) {
+    toast('请先在步骤3输入文案', 'warning');
+    return;
+  }
+  toast('智能推荐需要先生成视频以获取字幕时间戳，请先完成生成后在"我的任务"中使用精修编辑器', 'info');
+  const sentences = script.split(/[。！？\n]/).filter(s => s.trim().length > 2);
+  let currentTime = 1.5;
+  wizBrollState.subtitleSegments = sentences.map(s => {
+    const dur = Math.max(2, s.length * 0.35);
+    const seg = { text: s.trim(), start: currentTime, end: currentTime + dur };
+    currentTime += dur + 0.2;
+    return seg;
+  });
+  wizBrollState.duration = currentTime + 1;
+  renderWizardTimeline();
+  toast(`已基于文案预估 ${wizBrollState.subtitleSegments.length} 段字幕时间轴`, 'success');
+}
+
+// 渲染时间轴
+function renderWizardTimeline() {
+  const track = document.getElementById('wiz-broll-track');
+  const subTrack = document.getElementById('wiz-subtitle-track');
+  const ruler = document.getElementById('wiz-ruler');
+  if (!track || !subTrack) return;
+
+  const duration = wizBrollState.duration || 60;
+  const trackWidth = Math.max(600, duration * 20);
+
+  track.style.width = trackWidth + 'px';
+  subTrack.style.width = trackWidth + 'px';
+  if (ruler) {
+    ruler.style.width = trackWidth + 'px';
+    ruler.innerHTML = '';
+    for (let t = 0; t <= duration; t += Math.max(1, Math.round(duration / 20))) {
+      const tick = document.createElement('div');
+      tick.className = 'ruler-tick';
+      tick.style.left = (t * 20) + 'px';
+      tick.textContent = t + 's';
+      ruler.appendChild(tick);
+    }
+  }
+
+  track.innerHTML = '';
+  track.onclick = (e) => {
+    if (e.target !== track) return;
+    if (!wizBrollState.selectedAsset) {
+      toast('请先在左侧选择一个 B-roll 素材', 'error');
+      return;
+    }
+    const rect = track.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const start = x / 20;
+    openWizardClipModal(start);
+  };
+
+  wizBrollState.clips.forEach((clip, idx) => {
+    const seg = document.createElement('div');
+    seg.className = `tl-broll-segment ${clip.mode}`;
+    seg.style.left = (clip.start * 20) + 'px';
+    seg.style.width = ((clip.end - clip.start) * 20) + 'px';
+    const modeIcon = clip.mode === 'pip' ? 'PIP' : 'CUT';
+    seg.innerHTML = `${modeIcon} ${clip.filename || 'B-roll'}<span class="tl-segment-delete" onclick="event.stopPropagation();deleteWizardClip(${idx})">×</span>`;
+    seg.title = `${clip.mode === 'pip' ? '画中画' : '整段切换'} · ${clip.start.toFixed(1)}s-${clip.end.toFixed(1)}s · 点击编辑`;
+    seg.onclick = (e) => { e.stopPropagation(); openWizardClipModal(null, idx); };
+    track.appendChild(seg);
+  });
+
+  subTrack.innerHTML = '';
+  if (!wizBrollState.subtitleSegments.length) {
+    subTrack.innerHTML = '<div style="color:var(--text-tertiary);font-size:11px;padding:0 8px;line-height:32px">暂无字幕数据（可点击B-roll轨道空白处插入）</div>';
+  } else {
+    wizBrollState.subtitleSegments.forEach((seg, idx) => {
+      const el = document.createElement('div');
+      el.className = 'tl-subtitle-segment';
+      el.style.left = (seg.start * 20) + 'px';
+      el.style.width = ((seg.end - seg.start) * 20) + 'px';
+      el.textContent = seg.text.length > 12 ? seg.text.slice(0, 12) + '…' : seg.text;
+      el.title = `${seg.start.toFixed(1)}s-${seg.end.toFixed(1)}s: ${seg.text}`;
+      subTrack.appendChild(el);
+
+      if (idx < wizBrollState.subtitleSegments.length - 1) {
+        const nextStart = wizBrollState.subtitleSegments[idx + 1].start;
+        const gapStart = seg.end;
+        const gapEnd = nextStart;
+        if (gapEnd - gapStart > 0.3) {
+          const insertBtn = document.createElement('div');
+          insertBtn.className = 'tl-insert-plus';
+          insertBtn.style.left = (((gapStart + gapEnd) / 2) * 20 - 9) + 'px';
+          insertBtn.textContent = '+';
+          insertBtn.title = `在字幕间插入 B-roll（${gapStart.toFixed(1)}s - ${gapEnd.toFixed(1)}s 间隙）`;
+          insertBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (!wizBrollState.selectedAsset) {
+              toast('请先选择一个 B-roll 素材', 'error');
+              return;
+            }
+            openWizardClipModal(gapStart, null, gapEnd);
+          };
+          subTrack.appendChild(insertBtn);
+        }
+      }
+    });
+  }
+}
+
+// 打开添加/编辑片段弹窗
+function openWizardClipModal(start, editIdx, maxEnd) {
+  const isEdit = editIdx !== null && editIdx !== undefined;
+  const existing = isEdit ? wizBrollState.clips[editIdx] : null;
+  const clip = isEdit ? existing : {
+    start: start || 0,
+    end: (start || 0) + 5,
+    mode: 'pip',
+    asset_path: wizBrollState.selectedAsset?.path || '',
+    filename: wizBrollState.selectedAsset?.filename || '',
+    transition: 'none',
+    pip_position: 'bottom_right',
+    pip_scale: 0.3
+  };
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const modal = document.createElement('div');
+  modal.className = 'glass-card-heavy';
+  modal.style.cssText = 'width:400px;max-width:90vw;padding:24px';
+  modal.innerHTML = `
+    <h3 style="font-size:18px;font-weight:600;margin-bottom:16px">${isEdit ? '编辑' : '添加'} B-roll 片段</h3>
+    <div style="margin-bottom:12px">
+      <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">素材</label>
+      <div style="padding:8px 12px;background:var(--bg-elevated);border-radius:8px;font-size:13px">${clip.filename || '未选择'}</div>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:12px">
+      <div style="flex:1">
+        <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">开始(s)</label>
+        <input type="number" id="wiz-clip-start" value="${clip.start.toFixed(1)}" step="0.5" min="0" style="width:100%;padding:8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary)">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">结束(s)</label>
+        <input type="number" id="wiz-clip-end" value="${clip.end.toFixed(1)}" step="0.5" min="0" style="width:100%;padding:8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary)">
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">模式</label>
+      <select id="wiz-clip-mode" style="width:100%;padding:8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary)" onchange="document.getElementById('wiz-pip-settings').style.display=this.value==='pip'?'block':'none'">
+        <option value="pip" ${clip.mode==='pip'?'selected':''}>画中画(PIP) - 叠加在数字人上</option>
+        <option value="cut" ${clip.mode==='cut'?'selected':''}>整段切换(CUT) - 替换主画面</option>
+      </select>
+    </div>
+    <div id="wiz-pip-settings" style="display:${clip.mode==='pip'?'block':'none'};margin-bottom:12px">
+      <div style="display:flex;gap:12px">
+        <div style="flex:1">
+          <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">位置</label>
+          <select id="wiz-clip-pip-pos" style="width:100%;padding:6px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary)">
+            <option value="bottom_right" ${clip.pip_position==='bottom_right'?'selected':''}>右下</option>
+            <option value="bottom_left" ${clip.pip_position==='bottom_left'?'selected':''}>左下</option>
+            <option value="top_right" ${clip.pip_position==='top_right'?'selected':''}>右上</option>
+            <option value="top_left" ${clip.pip_position==='top_left'?'selected':''}>左上</option>
+          </select>
+        </div>
+        <div style="flex:1">
+          <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">缩放</label>
+          <input type="range" id="wiz-clip-pip-scale" min="0.15" max="0.6" step="0.05" value="${clip.pip_scale||0.3}" style="width:100%">
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:13px;color:var(--text-secondary);display:block;margin-bottom:4px">转场</label>
+      <select id="wiz-clip-trans" style="width:100%;padding:8px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary)">
+        <option value="none" ${clip.transition==='none'?'selected':''}>无</option>
+        <option value="fade" ${clip.transition==='fade'?'selected':''}>淡入淡出</option>
+        <option value="slide" ${clip.transition==='slide'?'selected':''}>滑入</option>
+        <option value="zoom" ${clip.transition==='zoom'?'selected':''}>缩放</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      ${isEdit ? '<button class="btn btn-secondary" style="color:var(--state-error)" onclick="deleteWizardClip('+editIdx+');document.querySelector(\'div[style*=fixed]\').remove()">删除</button>' : ''}
+      <button class="btn btn-secondary" onclick="document.querySelector('div[style*=fixed]').remove()">取消</button>
+      <button class="btn btn-primary" onclick="saveWizardClip(${isEdit ? editIdx : 'null'})">保存</button>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+// 保存片段
+function saveWizardClip(editIdx) {
+  const start = parseFloat(document.getElementById('wiz-clip-start').value);
+  const end = parseFloat(document.getElementById('wiz-clip-end').value);
+  const mode = document.getElementById('wiz-clip-mode').value;
+  const transition = document.getElementById('wiz-clip-trans').value;
+  const pipPos = document.getElementById('wiz-clip-pip-pos')?.value || 'bottom_right';
+  const pipScale = parseFloat(document.getElementById('wiz-clip-pip-scale')?.value || 0.3);
+
+  if (end <= start) {
+    toast('结束时间必须大于开始时间', 'error');
+    return;
+  }
+
+  const existing = (editIdx !== null && editIdx !== undefined) ? wizBrollState.clips[editIdx] : null;
+  const clip = {
+    start, end, mode, transition,
+    asset_path: wizBrollState.selectedAsset?.path || (existing?.asset_path || ''),
+    filename: wizBrollState.selectedAsset?.filename || (existing?.filename || ''),
+    pip_position: pipPos,
+    pip_scale: pipScale
+  };
+
+  if (editIdx !== null && editIdx !== undefined) {
+    wizBrollState.clips[editIdx] = clip;
+  } else {
+    wizBrollState.clips.push(clip);
+  }
+
+  document.querySelector('div[style*="position:fixed"]')?.remove();
+  renderWizardTimeline();
+  renderWizardClipList();
+  toast(`已${editIdx !== null ? '更新' : '添加'} ${mode === 'pip' ? '画中画' : '整段切换'} 片段 (${start.toFixed(1)}s-${end.toFixed(1)}s)`, 'success');
+}
+
+// 删除片段
+function deleteWizardClip(idx) {
+  wizBrollState.clips.splice(idx, 1);
+  document.querySelector('div[style*="position:fixed"]')?.remove();
+  renderWizardTimeline();
+  renderWizardClipList();
+}
+
+// 渲染已添加片段列表
+function renderWizardClipList() {
+  const list = document.getElementById('wiz-broll-clips');
+  if (!list) return;
+  if (!wizBrollState.clips.length) {
+    list.innerHTML = '<div style="text-align:center;color:var(--text-tertiary);font-size:12px;padding:12px">暂无片段，点击时间轴添加</div>';
+    return;
+  }
+  list.innerHTML = wizBrollState.clips.map((c, i) => `
+    <div style="padding:8px 12px;background:var(--bg-elevated);border-radius:8px;margin-bottom:6px;font-size:12px;cursor:pointer" onclick="openWizardClipModal(null,${i})">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-weight:500">${c.mode === 'pip' ? 'PIP' : 'CUT'} · ${c.filename || 'B-roll'}</span>
+        <span style="color:var(--text-tertiary)">${c.start.toFixed(1)}-${c.end.toFixed(1)}s</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// 清空所有片段
+function clearWizardBrollClips() {
+  if (!wizBrollState.clips.length) return;
+  if (confirm('确定清空所有 B-roll 片段？')) {
+    wizBrollState.clips = [];
+    renderWizardTimeline();
+    renderWizardClipList();
+    toast('已清空', 'info');
+  }
+}
+
+// 获取向导 B-roll 配置（供 wizardGenerate 调用）
+function getWizardBrollClips() {
+  if (!document.getElementById('wiz-broll-enabled')?.checked) return [];
+  return wizBrollState.clips;
 }
