@@ -257,7 +257,7 @@ body::after {
 
 .logo-text {
   font-family: var(--font-display);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 18px;
   letter-spacing: -0.03em;
   background: linear-gradient(135deg, #1d1d1f 0%, rgba(29, 29, 31, 0.7) 100%);
@@ -391,7 +391,7 @@ body::after {
 .page-title {
   font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.03em;
   margin-bottom: 6px;
 }
@@ -586,22 +586,18 @@ body::after {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #0071e3 0%, #006edb 100%);
+  background: #1d1d1f;
   color: white;
-  box-shadow: 
-    0 4px 12px rgba(0, 113, 227, 0.3),
-    0 1px 0 rgba(255, 255, 255, 0.2) inset;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .btn-primary:hover {
-  transform: scale(1.02);
-  box-shadow: 
-    0 6px 20px rgba(0, 113, 227, 0.4),
-    0 1px 0 rgba(255, 255, 255, 0.3) inset;
+  background: #000000;
+  opacity: 0.9;
 }
 
 .btn-primary:active {
-  transform: scale(0.98);
+  opacity: 0.7;
 }
 
 .btn-primary:disabled {
@@ -4823,6 +4819,30 @@ input[type="color"]::-webkit-color-swatch {
   width: 18px;
   height: 18px;
   stroke-width: 2;
+}
+
+.template-card-icon svg, .scene-card-icon svg, .preset-avatar-icon svg, .preset-voice-icon svg, .upload-icon svg {
+  width: 28px;
+  height: 28px;
+  stroke-width: 1.75;
+}
+
+.btn-card-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2;
+}
+
+.empty-state-icon svg {
+  width: 32px;
+  height: 32px;
+  stroke-width: 1.5;
+}
+
+.hero-icon-big svg {
+  width: 40px;
+  height: 40px;
+  stroke-width: 1.5;
 }
 .nav-icon {
   display: flex;

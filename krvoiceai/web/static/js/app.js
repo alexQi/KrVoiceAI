@@ -392,7 +392,7 @@ async function loadDashboardTemplates() {
     const entries = Object.entries(templates).slice(0, 6);
     grid.innerHTML = entries.map(([key, tpl]) => `
       <div class="template-card" data-key="${key}">
-        <div class="template-card-icon">${tpl.icon}</div>
+        <div class="template-card-icon"><i data-lucide="${tpl.icon}"></i></div>
         <div class="template-card-label">${tpl.label}</div>
         <div class="template-card-desc">${tpl.description}</div>
         <div class="template-card-tags">
@@ -401,6 +401,7 @@ async function loadDashboardTemplates() {
         </div>
       </div>
     `).join('');
+    if (window.lucide) lucide.createIcons();
     grid.querySelectorAll('.template-card').forEach(card => {
       card.addEventListener('click', () => applyDashboardTemplate(card.dataset.key));
     });
@@ -833,7 +834,7 @@ function renderWizardTemplateGrid(templates) {
   if (!grid) return;
   grid.innerHTML = Object.entries(templates).map(([key, tpl]) => `
     <div class="template-card" data-key="${key}">
-      <div class="template-card-icon">${tpl.icon}</div>
+      <div class="template-card-icon"><i data-lucide="${tpl.icon}"></i></div>
       <div class="template-card-label">${tpl.label}</div>
       <div class="template-card-desc">${tpl.description}</div>
       <div class="template-card-tags">
@@ -2163,7 +2164,7 @@ async function loadTemplatesCenter() {
     const templates = await ensureTemplates();
     grid.innerHTML = Object.entries(templates).map(([key, tpl]) => `
       <div class="template-card" data-key="${key}">
-        <div class="template-card-icon">${tpl.icon}</div>
+        <div class="template-card-icon"><i data-lucide="${tpl.icon}"></i></div>
         <div class="template-card-label">${tpl.label}</div>
         <div class="template-card-desc">${tpl.description}</div>
         <div class="template-card-tags">
@@ -2177,6 +2178,7 @@ async function loadTemplatesCenter() {
         </div>
       </div>
     `).join('');
+    if (window.lucide) lucide.createIcons();
   } catch (e) {
     toast(`加载模板失败: ${e.message}`, 'error');
   }
