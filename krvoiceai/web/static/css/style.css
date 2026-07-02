@@ -105,7 +105,7 @@
   --glass-background: var(--bg-glass);
 
   /* 布局 */
-  --sidebar-width: 260px;
+  --sidebar-width: 220px;
   --topbar-height: 52px;
   --content-max-width: 1200px;
 }
@@ -219,7 +219,7 @@ body::after {
 }
 
 .sidebar-header {
-  padding: 18px 16px 14px;
+  padding: 12px 14px 8px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   background: rgba(0, 0, 0, 0.02);
 }
@@ -227,18 +227,18 @@ body::after {
 .logo {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .logo-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: #1d1d1f;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 16px;
   color: white;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 1px 0 rgba(255, 255, 255, 0.15) inset;
   position: relative;
@@ -256,7 +256,7 @@ body::after {
 .logo-text {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 18px;
+  font-size: 15px;
   letter-spacing: -0.03em;
   background: linear-gradient(135deg, #1d1d1f 0%, rgba(29, 29, 31, 0.7) 100%);
   -webkit-background-clip: text;
@@ -270,7 +270,7 @@ body::after {
 
 .sidebar-nav {
   flex: 1;
-  padding: 16px 12px;
+  padding: 10px 8px;
   overflow-y: auto;
 }
 
@@ -290,18 +290,18 @@ body::after {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 7px 10px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all var(--transition-base);
-  margin-bottom: 2px;
+  margin-bottom: 1px;
   position: relative;
   text-align: left;
   font-family: var(--font-body);
@@ -335,13 +335,13 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 
 .sidebar-footer {
-  padding: 16px;
+  padding: 10px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -383,20 +383,20 @@ body::after {
 }
 
 .page-header {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .page-title {
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.03em;
-  margin-bottom: 6px;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
 }
 
 .page-subtitle {
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: 13px;
 }
 
 /* ---------- 卡片 ---------- */
@@ -405,9 +405,9 @@ body::after {
   backdrop-filter: blur(40px) saturate(180%);
   -webkit-backdrop-filter: blur(40px) saturate(180%);
   border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 18px;
-  padding: 18px;
-  margin-bottom: 12px;
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
   transition: all var(--transition-spring);
   position: relative;
   overflow: hidden;
@@ -425,24 +425,23 @@ body::after {
 
 .card:hover {
   border-color: rgba(0, 0, 0, 0.12);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.10);
 }
 
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .card-title {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 16px;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -452,9 +451,9 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: linear-gradient(135deg, rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.03));
   color: #1d1d1f;
   position: relative;
@@ -474,15 +473,15 @@ body::after {
 
 /* ---------- 表单 ---------- */
 .form-group {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .form-label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
-  margin-bottom: 8px;
+  margin-bottom: 5px;
   letter-spacing: -0.01em;
 }
 
@@ -497,8 +496,8 @@ body::after {
 .form-textarea,
 .form-select {
   width: 100%;
-  padding: 10px 14px;
-  min-height: 44px;
+  padding: 7px 10px;
+  min-height: 34px;
   background: rgba(0, 0, 0, 0.03);
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 10px;
@@ -541,7 +540,7 @@ body::after {
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 10px;
 }
 
 /* ---------- 按钮 ---------- */
@@ -549,12 +548,12 @@ body::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 11px 22px;
-  min-height: 44px;
+  gap: 6px;
+  padding: 7px 16px;
+  min-height: 32px;
   border: none;
   border-radius: 980px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-spring);
@@ -766,7 +765,7 @@ body::after {
 .result-grid {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: 20px;
+  gap: 10px;
 }
 
 .result-video {
@@ -891,7 +890,7 @@ body::after {
 .upload-zone {
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: 24px;
+  padding: 16px;
   text-align: center;
   cursor: pointer;
   transition: all var(--transition-base);
@@ -909,10 +908,10 @@ body::after {
 }
 
 .upload-icon {
-  font-size: 32px;
-  margin-bottom: 12px;
-  width: 64px;
-  height: 64px;
+  font-size: 24px;
+  margin-bottom: 8px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -947,8 +946,8 @@ body::after {
 /* ---------- 网格卡片 ---------- */
 .asset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
 }
 
 .asset-card {
@@ -1032,8 +1031,8 @@ body::after {
 /* ---------- 页面切换 ---------- */
 .page {
   display: none;
-  padding: 20px 28px;
-  max-width: 960px;
+  padding: 14px 20px;
+  max-width: 1100px;
   margin: 0 auto;
   animation: fadeInUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -1061,15 +1060,15 @@ body::after {
 /* ---------- 空状态 ---------- */
 .empty-state {
   text-align: center;
-  padding: 40px 20px;
+  padding: 24px 16px;
   color: var(--text-muted);
 }
 
 .empty-state-icon {
-  font-size: 40px;
-  margin-bottom: 16px;
+  font-size: 28px;
+  margin-bottom: 10px;
   opacity: 0.6;
-  width: 80px;
+  width: 56px;
   height: 80px;
   display: flex;
   align-items: center;
@@ -1664,8 +1663,8 @@ input[type="color"]::-webkit-color-swatch {
   align-items: flex-start;
   justify-content: center;
   gap: 0;
-  padding: 14px 16px;
-  margin-bottom: 14px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
   background: rgba(255, 255, 255, 0.6);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -1690,8 +1689,8 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .wizard-step-circle {
-  width: 44px;
-  height: 44px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1728,7 +1727,7 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .wizard-step.completed .wizard-step-circle .wizard-step-num::before {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .wizard-step-text {
@@ -1788,9 +1787,9 @@ input[type="color"]::-webkit-color-swatch {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px;
-  margin-top: 24px;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-top: 12px;
   background: var(--bg-glass);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
@@ -1824,7 +1823,7 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .btn-card {
-  padding: 14px 10px;
+  padding: 8px 6px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
@@ -1948,15 +1947,15 @@ input[type="color"]::-webkit-color-swatch {
 /* ---------- 模板卡片网格 ---------- */
 .template-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
 }
 
 .template-card {
-  padding: 20px;
+  padding: 10px 12px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-base);
   position: relative;
@@ -1996,10 +1995,10 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .template-card-icon {
-  font-size: 32px;
-  margin-bottom: 14px;
+  font-size: 24px;
+  margin-bottom: 8px;
   line-height: 1;
-  width: 60px;
+  width: 44px;
   height: 60px;
   display: flex;
   align-items: center;
@@ -2176,9 +2175,9 @@ input[type="color"]::-webkit-color-swatch {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 32px;
-  padding: 24px 28px;
-  margin-bottom: 32px;
+  gap: 18px;
+  padding: 14px 18px;
+  margin-bottom: 12px;
   background: var(--bg-glass);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border-default);
@@ -2301,7 +2300,7 @@ input[type="color"]::-webkit-color-swatch {
 
 .section-title {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -2310,13 +2309,13 @@ input[type="color"]::-webkit-color-swatch {
 .scene-card-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 36px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .scene-card {
   position: relative;
-  padding: 24px 20px;
+  padding: 12px 14px;
   background: var(--bg-glass);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border-default);
@@ -2557,7 +2556,7 @@ input[type="color"]::-webkit-color-swatch {
 
 .avatar-card {
   position: relative;
-  padding: 16px;
+  padding: 10px;
   background: var(--bg-elevated);
   border: 2px solid var(--border-default);
   border-radius: var(--radius-lg);
@@ -2632,7 +2631,7 @@ input[type="color"]::-webkit-color-swatch {
 
 .voice-card {
   position: relative;
-  padding: 18px;
+  padding: 10px;
   background: var(--bg-elevated);
   border: 2px solid var(--border-default);
   border-radius: var(--radius-lg);
