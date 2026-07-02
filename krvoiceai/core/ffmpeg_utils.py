@@ -206,6 +206,82 @@ class FFmpegRunner:
         )
         return output_audio
 
+    def post_process_audio(
+        self,
+        input_audio: Path,
+        output_audio: Path,
+        remove_silence: bool = False,
+        pause_duration: float = 0.0,
+        voice_enhance: bool = False,
+    ) -> Path:
+        """音频后处理：静音消除、句间停顿、人声增强
+
+        Args:
+            input_audio: 输入音频文件
+            output_audio: 输出音频文件
+            remove_silence: 是否消除首尾静音和过长停顿
+            pause_duration: 句间停顿时长（秒），0 表示不插入
+            voice_enhance: 是否启用人声增强（降噪+均衡+压缩）
+
+        Returns:
+            输出音频路径
+        """
+        input_audio = Path(input_audio)
+        output_audio = Path(output_audio)
+        output_audio.parent.mkdir(parents=True, exist_ok=True)
+
+        # 如果不需要任何处理，直接复制
+        if not remove_silence and pause_duration <= 0 and not voice_enhance:
+            import shutil
+            shutil.copy2(input_audio, output_audio)
+            return output_audio
+
+        # 构建音频滤镜链
+        filters = []
+
+        if remove_silence:
+            # silenceremove: 消除首尾静音 + 过长停顿
+            # start_duration: 开头超过0.5秒的静音移除
+            # stop_duration: 中间超过1.0秒的静音压缩到0.3秒
+            filters.append(
+                "silenceremove=start_periods=1:start_duration=0.5:"
+                "start_threshold=-50dB:"
+                "stop_periods=-1:stop_duration=1.0:"
+                "stop_threshold=-50dB:"
+                "window=0.1"
+            )
+
+        if voice_enhance:
+            # 人声增强：高通滤波(去低频隆隆声) + 轻度压缩 + 响度归一化
+            filters.append("highpass=f=80")          # 去除80Hz以下低频噪声
+            filters.append("acompressor=threshold=-20dB:ratio=3:attack=5:release=50")  # 轻度压缩
+            filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")  # 响度归一化(播客标准)
+
+        # 句间停顿：通过在句子间插入静音实现
+        # 注意：pause_duration 需要在 TTS 合成时处理（在句号后插入静音），
+        # 这里只能在后处理阶段通过 areverse+silenceremove 间接实现有限效果
+        # 简单方案：如果 pause_duration > 0，在音频末尾不加，但记录到 metadata
+        # 真正的句间停顿需要 TTS provider 支持（edge_tts 不支持）
+        # 所以这里暂不实现 pause_duration 的音频处理，只记录日志
+
+        if pause_duration > 0:
+            self.logger.info(
+                f"pause_duration={pause_duration}s 需 TTS provider 支持，"
+                f"当前后处理阶段不实际处理，仅记录到 metadata"
+            )
+
+        filter_chain = ",".join(filters) if filters else "anull"
+
+        args = [
+            "-i", str(input_audio),
+            "-af", filter_chain,
+            "-c:a", "pcm_s16le",  # 保持 wav 格式
+            "-y", str(output_audio),
+        ]
+        self.run(args)
+        return output_audio
+
+
     def overlay_video_pip(
         self,
         main_video: Path,

@@ -28,6 +28,7 @@ from ..core.audio_utils import (
 )
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.gpu_runner import GPURunner
+from ..core.ffmpeg_utils import FFmpegRunner
 
 
 # edge-tts 情感 -> rate/pitch 映射表（emotion 优先，覆盖 config 派生的 rate/pitch）
@@ -62,6 +63,8 @@ class TTSEngine(BaseModule):
         self.gpu = gpu_runner or GPURunner()
         # MOSS-TTS-Nano 运行时（懒加载，首次 moss_nano 合成时初始化）
         self._moss_runtime = None
+        # FFmpeg 工具（用于音频后处理：静音消除/人声增强）
+        self.ffmpeg = FFmpegRunner()
 
     def setup(self) -> None:
         # 判断真实可用性
@@ -127,6 +130,40 @@ class TTSEngine(BaseModule):
                     text, voice_id, output_path, speed, volume, pitch, emotion
                 )
 
+            # 音频后处理：静音消除/人声增强
+            remove_silence = bool(audio_cfg.get("remove_silence", False))
+            voice_enhance = bool(audio_cfg.get("voice_enhance", False))
+            pause_duration = float(audio_cfg.get("pause_duration", 0) or 0)
+
+            if remove_silence or voice_enhance:
+                try:
+                    processed_path = ctx.work_dir / "tts_post_processed.wav"
+                    self.ffmpeg.post_process_audio(
+                        input_audio=audio_path,
+                        output_audio=processed_path,
+                        remove_silence=remove_silence,
+                        pause_duration=pause_duration,
+                        voice_enhance=voice_enhance,
+                    )
+                    # 重新计算时长
+                    import subprocess as _sp
+                    r = _sp.run(
+                        [self.ffmpeg.ffprobe, "-v", "error", "-show_entries", "format=duration",
+                         "-of", "csv=p=0", str(processed_path)],
+                        capture_output=True, text=True,
+                    )
+                    if r.stdout.strip():
+                        duration = float(r.stdout.strip())
+                    audio_path = processed_path
+                    self.logger.info(f"音频后处理完成: remove_silence={remove_silence}, voice_enhance={voice_enhance}, duration={duration:.2f}s")
+                except Exception as e:
+                    self.logger.warning(f"音频后处理失败，使用原始音频: {e}")
+            elif pause_duration > 0:
+                self.logger.info(
+                    f"pause_duration={pause_duration}s 需 TTS provider 支持，"
+                    f"当前仅记录到 metadata，不实际处理音频"
+                )
+
             ctx.audio_path = audio_path
             ctx.audio_duration = duration
             ctx.metadata["tts_timestamps"] = timestamps
@@ -137,6 +174,9 @@ class TTSEngine(BaseModule):
             ctx.metadata["tts_audio_opts"] = {
                 "speed": speed, "volume": volume, "pitch": pitch, "emotion": emotion,
                 "emotion_applied": emotion_applied,
+                "remove_silence": remove_silence,
+                "voice_enhance": voice_enhance,
+                "pause_duration": pause_duration,
             }
 
             return ModuleResult(
