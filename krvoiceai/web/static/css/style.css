@@ -1708,18 +1708,17 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .wizard-step.active .wizard-step-circle {
-  background: linear-gradient(135deg, #0071e3, #5e5ce6);
+  background: #1d1d1f;
   border-color: transparent;
   color: white;
-  box-shadow: 0 0 20px rgba(0, 113, 227, 0.5), 0 4px 12px rgba(0, 113, 227, 0.3);
-  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .wizard-step.completed .wizard-step-circle {
-  background: linear-gradient(135deg, #30d158, #28a745);
+  background: #30d158;
   border-color: transparent;
   color: white;
-  box-shadow: 0 0 12px rgba(48, 209, 88, 0.3);
+  box-shadow: 0 1px 4px rgba(48, 209, 88, 0.2);
 }
 
 .wizard-step.completed .wizard-step-circle .wizard-step-num::before {
@@ -2031,7 +2030,7 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .template-card.selected .template-card-icon {
-  background: linear-gradient(135deg, #0071e3, #5e5ce6);
+  background: #1d1d1f;
   color: white;
   box-shadow:
     0 4px 14px rgba(0, 113, 227, 0.35),
@@ -3417,10 +3416,9 @@ input[type="color"]::-webkit-color-swatch {
 
 .progress-bar-fill {
   height: 100%;
-  background: var(--gradient-primary);
+  background: #1d1d1f;
   border-radius: 5px;
   transition: width 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
-  box-shadow: var(--shadow-glow);
 }
 
 .progress-bar-meta {
