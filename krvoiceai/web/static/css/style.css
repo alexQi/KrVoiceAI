@@ -315,9 +315,10 @@ body::after {
 }
 
 .nav-item.active {
-  background: rgba(0, 113, 227, 0.15);
-  color: #0071e3;
-  box-shadow: 0 0 20px rgba(0, 113, 227, 0.15);
+  background: rgba(0, 0, 0, 0.06);
+  color: #1d1d1f;
+  font-weight: 600;
+  box-shadow: none;
 }
 
 .nav-item.active::before {
@@ -328,9 +329,8 @@ body::after {
   transform: translateY(-50%);
   width: 3px;
   height: 20px;
-  background: #0071e3;
+  background: #1d1d1f;
   border-radius: 0 2px 2px 0;
-  box-shadow: 0 0 8px #0071e3;
 }
 
 .nav-icon {
@@ -500,7 +500,8 @@ body::after {
 .form-select {
   width: 100%;
   padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.04);
+  min-height: 44px;
+  background: rgba(0, 0, 0, 0.03);
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 10px;
   color: var(--text-primary);
@@ -514,9 +515,9 @@ body::after {
 .form-textarea:focus,
 .form-select:focus {
   outline: none;
-  border-color: #0071e3;
-  background: rgba(0, 113, 227, 0.04);
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+  border-color: #1d1d1f;
+  background: rgba(0, 0, 0, 0.02);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
 }
 
 .form-textarea {
@@ -652,6 +653,7 @@ body::after {
 
 .btn-lg {
   padding: 14px 32px;
+  min-height: 48px;
   font-size: 15px;
 }
 
