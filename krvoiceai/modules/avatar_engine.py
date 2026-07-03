@@ -154,6 +154,88 @@ class AvatarEngine(BaseModule):
         """
         return False
 
+    def _validate_reference_video_faces(
+        self, video_path: Path, env_python: Path | None = None
+    ) -> None:
+        """参考视频预检查：抽帧检测人脸，提前发现"部分帧无人脸"问题
+
+        Wav2Lip 要求参考视频所有帧都有人脸，否则会在 face_detect 阶段失败。
+        如果在推理开始后才发现，用户已等待数十分钟（GPU）或数小时（CPU）。
+        本方法在推理前抽帧（每30帧取1帧）快速检测，发现问题立即报错。
+
+        Raises:
+            RuntimeError: 当抽检帧中存在无人脸帧时
+        """
+        import tempfile
+        try:
+            # 确定 env_python（用于调用 cv2）
+            if env_python is None:
+                from ..core.config import PROJECT_ROOT
+                project_root = Path(PROJECT_ROOT)
+                def _abs(p: str) -> Path:
+                    path = Path(p)
+                    return path if path.is_absolute() else (project_root / p).resolve()
+                env_python = _abs(self.wav2lip_env_python)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                # 每30帧抽1帧，快速采样
+                import subprocess as _sp
+                _sp.run(
+                    [self.ffmpeg.ffmpeg, "-y", "-i", str(video_path),
+                     "-vf", "select='not(mod(n,30))'",
+                     "-vsync", "vfr", "-q:v", "2",
+                     str(tmp_path / "frame_%04d.jpg")],
+                    capture_output=True, timeout=60,
+                )
+                frames = sorted(tmp_path.glob("frame_*.jpg"))
+                if not frames:
+                    self.logger.warning("参考视频抽帧失败，跳过预检查")
+                    return
+
+                # 用 wav2lip_env 的 cv2 检测人脸
+                check_script = (
+                    "import cv2, sys, os\n"
+                    "cascade = cv2.CascadeClassifier("
+                    "cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')\n"
+                    "no_face = []\n"
+                    "for f in sys.argv[1:]:\n"
+                    "    img = cv2.imread(f)\n"
+                    "    if img is None: continue\n"
+                    "    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)\n"
+                    "    faces = cascade.detectMultiScale("
+                    "gray, scaleFactor=1.1, minNeighbors=3, minSize=(60, 60))\n"
+                    "    if len(faces) == 0:\n"
+                    "        no_face.append(os.path.basename(f))\n"
+                    "if no_face:\n"
+                    "    print('NO_FACE:' + ','.join(no_face))\n"
+                    "else:\n"
+                    "    print('ALL_OK:' + str(len(sys.argv) - 1))\n"
+                )
+                r = _sp.run(
+                    [str(env_python), "-c", check_script] + [str(f) for f in frames],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if r.returncode == 0 and "NO_FACE:" in r.stdout:
+                    no_face_frames = r.stdout.split("NO_FACE:")[1].strip()
+                    raise RuntimeError(
+                        f"参考视频 {video_path.name} 部分帧无人脸（{no_face_frames}）。"
+                        f"Wav2Lip 要求所有帧都有人脸，否则推理会失败。"
+                        f"请重新上传全程有人脸的视频，或裁剪掉无人脸的片段。"
+                    )
+                elif r.returncode == 0 and "ALL_OK" in r.stdout:
+                    count = r.stdout.split("ALL_OK:")[1].strip()
+                    self.logger.info(f"参考视频预检查通过（{count} 帧采样均有人脸）")
+                else:
+                    self.logger.warning(
+                        f"参考视频预检查异常（跳过）: stdout={r.stdout[:100]}, stderr={r.stderr[:100]}"
+                    )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            # 预检查失败不阻断流程，仅警告（避免环境影响主流程）
+            self.logger.warning(f"参考视频预检查失败（跳过）: {e}")
+
     def run(self, ctx: JobContext) -> ModuleResult:
         """根据 ctx.audio_path 生成口播视频"""
         if not ctx.audio_path or not ctx.audio_path.exists():
@@ -226,6 +308,11 @@ class AvatarEngine(BaseModule):
             )
 
         self.logger.info(f"参考人脸: {face_path}")
+
+        # 参考视频预检查：抽帧检测人脸，提前发现"部分帧无人脸"问题
+        # 避免 Wav2Lip 跑数十分钟后才在 face_detect 阶段失败
+        if face_path.suffix.lower() in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+            self._validate_reference_video_faces(face_path, env_python=None)
 
         # 准备音频（Wav2Lip 需要 wav 格式）
         audio_path = ctx.audio_path
