@@ -1909,6 +1909,8 @@ async function pollGenerateJob(payload) {
 
   while (true) {
     if (Date.now() - t0 > maxWait) {
+      // 超时抛错前清理计时器，否则 1 秒计时器泄漏并继续把 ETA 覆写为“正在生成”
+      if (_progressTimerId) { clearInterval(_progressTimerId); _progressTimerId = null; }
       throw new Error('生成超时（超过 120 分钟），可能是数字人合成在 CPU 模式下耗时过长，建议减少文案长度、在设置中切换 resize_factor=2 快速模式，或使用 GPU 服务器');
     }
     await new Promise(r => setTimeout(r, pollInterval));
@@ -2436,17 +2438,16 @@ async function usePresetAvatar(avatarId, voice, emotion) {
       targetAvatarId = regData.avatar_id;
     }
 
-    // 2. 设置推荐音色
+    // 2. 设置推荐音色（GET 读取扁平 section dict，PUT 需 {section,data} 包裹）
     if (voice) {
-      const resp = await fetch('/api/settings/tts', { method: 'PUT' });
-      const ttsSection = await resp.json();
-      const ttsData = ttsSection.data || {};
+      const resp = await fetch('/api/settings/tts');
+      const ttsData = await resp.json();
       ttsData.default_voice = voice;
       if (emotion) ttsData.emotion = emotion;
       await fetch('/api/settings/tts', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ttsData),
+        body: JSON.stringify({ section: 'tts', data: ttsData }),
       });
     }
 
@@ -2509,16 +2510,15 @@ async function loadPresetVoices() {
 // 使用预制音色
 async function usePresetVoice(voiceId) {
   try {
-    // 先确保 TTS provider 是 edge_tts
+    // 先确保 TTS provider 是 edge_tts（GET 返回的是扁平 section dict，无 .data 包裹）
     const getResp = await fetch('/api/settings/tts');
-    const ttsSection = await getResp.json();
-    const ttsData = ttsSection.data || {};
+    const ttsData = await getResp.json();
     ttsData.provider = 'edge_tts';
     ttsData.default_voice = voiceId;
     const resp = await fetch('/api/settings/tts', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ttsData),
+      body: JSON.stringify({ section: 'tts', data: ttsData }),
     });
     const result = await resp.json();
     toast(result.success ? `已切换到 Edge TTS 并设置音色: ${voiceId}` : '设置失败', result.success ? 'success' : 'error');
@@ -2802,7 +2802,7 @@ async function showJobDetail(jobId) {
         <strong>创建时间:</strong> ${formatTime(job.created_at)}
       </div>
       <div class="pipeline">${stepsHtml}</div>
-      ${job.error ? `<div style="margin-top:12px;color:var(--color-error)">错误: ${job.error}</div>` : ''}
+      ${job.error ? `<div style="margin-top:12px;color:var(--color-error)">错误: ${escapeHtml(job.error)}</div>` : ''}
     `;
     if (window.lucide) lucide.createIcons();
   } catch (e) {
@@ -3286,8 +3286,8 @@ async function loadMatrixOptions() {
     const avatarList = avatars.avatars || avatars || [];
     avatarsEl.innerHTML = avatarList.map(a => `
       <label class="matrix-checkbox-item">
-        <input type="checkbox" value="${a.id || a.avatar_id || 'default'}" onchange="updateMatrixPreview()" ${a.id === 'default' ? 'checked' : ''}>
-        <span>${a.name || a.id || 'default'}</span>
+        <input type="checkbox" value="${a.avatar_id || 'default'}" onchange="updateMatrixPreview()" ${a.avatar_id === 'default' ? 'checked' : ''}>
+        <span>${escapeHtml(a.avatar_id || 'default')}</span>
       </label>
     `).join('') || '<div class="hint">无可用数字人</div>';
 
@@ -3295,8 +3295,8 @@ async function loadMatrixOptions() {
     const voiceList = voices.voices || voices || [];
     voicesEl.innerHTML = voiceList.map(v => `
       <label class="matrix-checkbox-item">
-        <input type="checkbox" value="${v.id || v.voice_id || 'default'}" onchange="updateMatrixPreview()" ${v.id === 'default' ? 'checked' : ''}>
-        <span>${v.name || v.id || 'default'}</span>
+        <input type="checkbox" value="${v.voice_id || 'default'}" onchange="updateMatrixPreview()" ${v.voice_id === 'default' ? 'checked' : ''}>
+        <span>${escapeHtml(v.label || v.voice_id || 'default')}</span>
       </label>
     `).join('') || '<div class="hint">无可用音色</div>';
   } catch (e) {

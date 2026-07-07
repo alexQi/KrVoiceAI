@@ -996,10 +996,10 @@ async function runPublishVideo() {
             return `
               <div style="padding:8px;background:${bg};border-radius:4px;font-size:12px">
                 <div style="display:flex;justify-content:space-between">
-                  <span>${info.icon} ${info.name}</span>
-                  <span style="color:${color};font-weight:600">${r.status}</span>
+                  <span>${info.icon} ${escapeHtml(info.name)}</span>
+                  <span style="color:${color};font-weight:600">${escapeHtml(r.status)}</span>
                 </div>
-                ${r.url ? `<div style="color:#666;margin-top:4px"><a href="${r.url}" target="_blank">${r.url}</a></div>` : ''}
+                ${r.url ? `<div style="color:#666;margin-top:4px"><a href="${encodeURI(r.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.url)}</a></div>` : ''}
                 ${r.error ? `<div style="color:#c62828;margin-top:4px">${escapeHtml(r.error)}</div>` : ''}
               </div>
             `;
