@@ -446,15 +446,14 @@ class FFmpegRunner:
                 )
             prev_label = f"out{i}"
 
-            # B-roll 音频处理（同样按 start_t 延迟，与画面对齐）
+            # B-roll 音频处理：先裁到窗口时长再延迟到 start_t，使音频与可见画面
+            # [start_t,end_t] 对齐，不让整段 B-roll 音频溢出窗口之外；all=1 覆盖所有声道
             if volume > 0:
+                a_chain = f"[{i}:a]atrim=0:{clip_dur:.3f},asetpts=PTS-STARTPTS"
                 if start_t > 0:
-                    delay_ms = int(start_t * 1000)
-                    filter_parts.append(
-                        f"[{i}:a]adelay={delay_ms}|{delay_ms},volume={volume}[a{i}]"
-                    )
-                else:
-                    filter_parts.append(f"[{i}:a]volume={volume}[a{i}]")
+                    a_chain += f",adelay={int(start_t * 1000)}:all=1"
+                a_chain += f",volume={volume}[a{i}]"
+                filter_parts.append(a_chain)
 
         # 音频混合
         audio_parts = ["[0:a]volume=1.0[main_a]"]
@@ -732,19 +731,38 @@ class FFmpegRunner:
             self.run(args)
             seg_files.append(seg_file)
 
-        # concat 拼接所有片段
+        # concat 拼接所有片段（得到视频轨；此时音频是各段自身音频，B-roll 窗口内主旁白缺失）
         list_file = output.parent / "cut_concat_list.txt"
         with open(list_file, "w", encoding="utf-8") as f:
             for sf in seg_files:
                 f.write(f"file '{sf.absolute()}'\n")
 
-        args = [
+        concat_tmp = output.parent / "cut_concat_tmp.mp4"
+        self.run([
             "-f", "concat", "-safe", "0",
             "-i", str(list_file),
             "-c", "copy",
+            str(concat_tmp),
+        ])
+
+        # 用原主视频的完整音轨覆盖输出音频，保证 B-roll 窗口内主视频画外音（旁白）连续不断。
+        # （cut 模式契约=保留主音频；如需 B-roll 声音请用 pip 模式并设 volume>0。
+        #  1:a? 为可选映射：主视频无音轨时不报错，仅输出无声视频。）
+        self.run([
+            "-i", str(concat_tmp),
+            "-i", str(main_video),
+            "-map", "0:v",
+            "-map", "1:a?",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
             str(output),
-        ]
-        self.run(args)
+        ])
+        try:
+            concat_tmp.unlink()
+        except OSError:
+            pass
         self.logger.info(f"整段切换完成: {output.name} ({len(seg_files)} 片段)")
         return output
 

@@ -530,9 +530,10 @@ class TTSEngine(BaseModule):
                     seg_frames.append(wf.readframes(wf.getnframes()))
                     seg_duration = wf.getnframes() / float(wf.getframerate() or 1)
             except (wave.Error, EOFError) as e:
-                # 理论上不应发生（服务端恒返回标准 WAV）；容错跳过该段 PCM，按估算记时长
-                self.logger.warning(f"{self.provider} 返回段非标准 WAV，跳过该段 PCM: {e}")
-                seg_duration = resp.get("duration", estimate_speech_duration(seg))
+                # 服务端契约恒返回标准 WAV；解析失败则整段跳过（不写音频、不计入时间轴），
+                # 保证输出音频与 timestamps 严格一致，避免后续句子时间戳漂移。
+                self.logger.warning(f"{self.provider} 返回段非标准 WAV，跳过该段: {e}")
+                continue
 
             timestamps.append({
                 "text": seg,
@@ -542,18 +543,21 @@ class TTSEngine(BaseModule):
             offset += seg_duration
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if wav_params is not None:
-            nch, sw, fr = wav_params
-            with wave.open(str(output_path), "wb") as out:
-                out.setnchannels(nch)
-                out.setsampwidth(sw)
-                out.setframerate(fr)
-                for frames in seg_frames:
-                    out.writeframes(frames)
-        else:
-            # 所有段都无法解析为 WAV：写第一段原始字节兜底（避免完全无输出）
-            output_path.write_bytes(b"".join(seg_frames) or b"")
-        duration = get_wav_duration(output_path) if output_path.exists() else offset
+        if wav_params is None:
+            # 所有分句都未返回可解析的 WAV：明确报错（由 run() 捕获置 success=False），
+            # 而非写出空/畸形文件后在 get_wav_duration 处崩溃。
+            raise RuntimeError(f"{self.provider} 所有分句均未返回可解析的 WAV 音频")
+        nch, sw, fr = wav_params
+        with wave.open(str(output_path), "wb") as out:
+            out.setnchannels(nch)
+            out.setsampwidth(sw)
+            out.setframerate(fr)
+            for frames in seg_frames:
+                out.writeframes(frames)
+        try:
+            duration = get_wav_duration(output_path)
+        except Exception:
+            duration = offset
 
         self.logger.info(
             f"{self.provider} 合成完成 duration={duration:.2f}s segments={len(segments)}"

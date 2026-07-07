@@ -21,7 +21,7 @@ function showTestResult(elId, result) {
   if (!el) return;
   const cls = result.success ? 'success' : 'error';
   const icon = result.success ? '✓' : '✕';
-  el.innerHTML = `<div class="test-result ${cls}">${icon} ${result.message}${result.elapsed_ms ? ` · ${result.elapsed_ms}ms` : ''}</div>`;
+  el.innerHTML = `<div class="test-result ${cls}">${icon} ${escapeHtml(result.message || '')}${result.elapsed_ms ? ` · ${result.elapsed_ms}ms` : ''}</div>`;
 }
 
 // ========== 子标签切换 ==========

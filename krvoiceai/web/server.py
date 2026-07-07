@@ -36,16 +36,26 @@ def _get_app() -> EnlyAI:
 
 
 def _allowed_roots() -> list[Path]:
-    """允许被 API 读取/处理的根目录白名单：工作区 + 系统临时目录。"""
+    """允许被 API 读取/处理的根目录白名单：配置工作区 + 其临时目录 + 硬编码 workspace_data。
+
+    刻意不包含系统 tempfile.gettempdir()（否则 /api/files 可读 /tmp 全树，越权）；
+    包含硬编码 workspace_data 是因多处产物端点仍用相对 Path("workspace_data")，
+    自定义 work_root 时若不加会把正常产物误判 403。
+    """
     roots: list[Path] = []
     try:
         from ..core.config import get_config
-        wr = get_config().get("project.work_root", "./workspace_data")
-        roots.append(Path(wr).resolve())
+        cfg = get_config()
+        roots.append(Path(cfg.get("project.work_root", "./workspace_data")).resolve())
+        roots.append(Path(cfg.get("project.temp_root", "./workspace_data/tmp")).resolve())
     except Exception:
-        roots.append(Path("./workspace_data").resolve())
-    roots.append(Path(tempfile.gettempdir()).resolve())
-    return roots
+        pass
+    roots.append(Path("workspace_data").resolve())
+    # 去重（保序）
+    seen: dict[str, Path] = {}
+    for r in roots:
+        seen.setdefault(str(r), r)
+    return list(seen.values())
 
 
 def _resolve_within_roots(path_str: str) -> Optional[Path]:

@@ -207,7 +207,7 @@ class OriginalityChecker(BaseModule):
             ctx.metadata["originality"] = report
 
             self.logger.info(
-                f"文案风控通过 simhash={hex(fingerprint)} "
+                f"文案风控通过 simhash={hex(fingerprint) if fingerprint is not None else 'skipped'} "
                 f"banned=0 llm={'skip' if self.llm.is_mock else 'ok'}"
             )
             return ModuleResult(success=True, data=report)

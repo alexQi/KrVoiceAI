@@ -159,6 +159,9 @@ class ScriptExtractor(BaseModule):
             except Exception:
                 pass
 
+        # 降级标记先复位：缓存命中会提前 return，必须在命中判断前置 False，
+        # 避免沿用上次调用遗留的值；且缓存只写真实结果（见文末），命中即为真实文案。
+        self._last_extract_degraded = False
         if _cache_file.exists():
             _age = time.time() - _cache_file.stat().st_mtime
             if _age < 86400:  # 24小时内的缓存有效
@@ -258,9 +261,10 @@ class ScriptExtractor(BaseModule):
             except Exception as e:
                 self.logger.warning(f"文章提取失败，降级到 mock: {e}")
                 text = self._extract_mock(video_url)
-        # 写入缓存（缓存清洗后的最终文本，保证与缓存命中返回的内容一致）
+        # 写入缓存（仅缓存真实结果；降级/mock 文案不缓存，避免瞬时故障恢复后仍返回假文案）
         final = self._clean_text(text)
-        _write_cache(final)
+        if not self._last_extract_degraded:
+            _write_cache(final)
         return final
 
     def _extract_from_local_file(self, path: Path) -> str:

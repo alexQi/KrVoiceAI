@@ -325,8 +325,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 words=seg.get("words"),
             )
         else:
-            # 先转义正文特殊字符，再自动折行（折行插入的 \\N 在转义之后添加，不受影响）
-            wrapped = _wrap_text(_ass_escape(seg["text"].strip()))
+            # 先转义正文特殊字符，再自动折行；最后把内嵌换行符转成 ASS 换行 \\N
+            # （否则字面换行会把单条 Dialogue 截断成两条物理行，第二行被 libass 丢弃）
+            wrapped = _wrap_text(_ass_escape(seg["text"].strip())).replace("\n", "\\N")
             if anim_tag:
                 # 应用动画标签（替换占位符）
                 tag = anim_tag.replace("x,x", f"{play_res_x//2},{play_res_x//2}")
