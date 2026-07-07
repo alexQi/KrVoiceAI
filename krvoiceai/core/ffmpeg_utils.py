@@ -29,7 +29,9 @@ class FFmpegRunner:
     def __init__(self, ffmpeg_path: str | None = None):
         cfg = get_config()
         self.ffmpeg = ffmpeg_path or cfg.get("composer.ffmpeg_path", "ffmpeg")
-        self.ffprobe = self.ffmpeg.replace("ffmpeg", "ffprobe")
+        # 仅替换文件名中的 ffmpeg→ffprobe，避免改写路径中的目录名（如 /opt/ffmpeg/bin/ffmpeg）
+        _ff = Path(self.ffmpeg)
+        self.ffprobe = str(_ff.with_name(_ff.name.replace("ffmpeg", "ffprobe")))
         self.logger = get_logger().bind(component="ffmpeg")
         # 硬件编码探测（启动时一次性检测，结果缓存于 hardware_probe 的 lru_cache）
         from .hardware_probe import get_video_encoder, detect_nvenc
@@ -400,11 +402,17 @@ class FFmpegRunner:
                 x -= border_width
                 y -= border_width
 
-            # 应用动画
+            # 应用动画（基于片段 0 基时间轴计算淡入淡出）
             clip_dur = end_t - start_t
             anim_filter = self._pip_animation_filter(animation, clip_dur)
             if anim_filter:
                 clip_filters.append(anim_filter)
+
+            # 时间对齐：把片段 PTS 平移到 start_t。否则 overlay 的 enable 仅门控窗口可见性，
+            # 而片段自身 PTS 从全局 0 起走——窗口 [start,end] 内会显示 B-roll 全局同刻的帧、
+            # 且淡入淡出发生在片段尚不可见时。平移后窗口内正确显示片段自身 [0,clip_dur] 的帧。
+            if start_t > 0:
+                clip_filters.append(f"setpts=PTS+{start_t}/TB")
 
             filter_parts.append(
                 ",".join(clip_filters) + f"[clip{i}]"
@@ -438,9 +446,15 @@ class FFmpegRunner:
                 )
             prev_label = f"out{i}"
 
-            # B-roll 音频处理
+            # B-roll 音频处理（同样按 start_t 延迟，与画面对齐）
             if volume > 0:
-                filter_parts.append(f"[{i}:a]volume={volume}[a{i}]")
+                if start_t > 0:
+                    delay_ms = int(start_t * 1000)
+                    filter_parts.append(
+                        f"[{i}:a]adelay={delay_ms}|{delay_ms},volume={volume}[a{i}]"
+                    )
+                else:
+                    filter_parts.append(f"[{i}:a]volume={volume}[a{i}]")
 
         # 音频混合
         audio_parts = ["[0:a]volume=1.0[main_a]"]
@@ -578,25 +592,42 @@ class FFmpegRunner:
             shutil.copy2(main_video, output)
             return output
 
-        # 按 start 排序
-        clips = sorted(broll_clips, key=lambda c: c.get("start", 0))
-
-        # 策略：用 concat 拼接多个片段
-        # 1. 主视频按 B-roll 时间点切分成多段
-        # 2. 在切分点插入 B-roll 片段
-        # 3. 所有片段统一参数后 concat
-
-        # 先探测主视频时长
+        # 先探测主视频时长（后面规整片段需要它做边界 clamp）
         main_duration = self.probe_duration(main_video)
         if main_duration <= 0:
             main_duration = 9999  # 兜底
 
-        # 构建切片列表：[(start, end, source, is_broll)]
+        # 规整 cut 片段：按 start 排序、消除重叠、clamp 到 [0, main_duration]、丢弃退化片段。
+        # 否则重叠/越界片段会让主视频对应段被跳读、cursor 单调性被破坏、整条时间线漂移。
+        raw_clips = sorted(broll_clips, key=lambda c: float(c.get("start", 0)))
+        clips = []
+        prev_end = 0.0
+        for clip in raw_clips:
+            cs = max(float(clip.get("start", 0)), prev_end)  # 不早于上一段结束，消除重叠
+            ce = min(float(clip.get("end", cs + 3)), main_duration)  # 不超过主视频结尾
+            if cs >= main_duration:
+                self.logger.warning(f"cut 片段 start={cs} 超出主视频时长 {main_duration}，丢弃")
+                continue
+            if ce - cs <= 0.1:
+                self.logger.warning(f"cut 片段 [{cs:.2f},{ce:.2f}] 无效或与前段重叠，丢弃")
+                continue
+            nclip = dict(clip)
+            nclip["start"], nclip["end"] = cs, ce
+            clips.append(nclip)
+            prev_end = ce
+
+        if not clips:
+            import shutil
+            shutil.copy2(main_video, output)
+            return output
+
+        # 策略：主视频按 B-roll 时间点切分成多段，切分点插入 B-roll 片段，统一参数后 concat
+        # 构建切片列表：[(start, end, source, is_broll, clip)]
         segments = []
         cursor = 0.0
         for clip in clips:
-            cs = float(clip.get("start", 0))
-            ce = float(clip.get("end", cs + 3))
+            cs = float(clip["start"])
+            ce = float(clip["end"])
             if cs > cursor:
                 # 主视频片段
                 segments.append((cursor, cs, str(main_video), False, None))

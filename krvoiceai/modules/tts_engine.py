@@ -1,9 +1,10 @@
 """TTS 声音克隆模块
 
-五种 provider：
+六种 provider：
 - moss_nano:  本地 MOSS-TTS-Nano ONNX（CPU 声音克隆，0.1B 模型，5s 样本零克隆）
 - mimo:       调用小米 MiMo TTS API（OpenAI 兼容 chat/completions 端点）
 - gpt_sovits: 调用云端 GPT-SoVITS API（声音克隆）
+- cosyvoice:  调用云端 CosyVoice2 API（GPU 声音克隆，质量强，与 gpt_sovits 共用 HTTP 契约）
 - edge_tts:   使用 edge-tts 标准音色（无克隆，CPU 可跑）
 - mock:       生成静音 wav（保证流程可跑通）
 
@@ -68,11 +69,11 @@ class TTSEngine(BaseModule):
 
     def setup(self) -> None:
         # 判断真实可用性
-        if self.provider == "gpt_sovits":
+        if self.provider in ("gpt_sovits", "cosyvoice"):
             available = self.gpu.health_check_tts()
             if not available:
                 self.logger.warning(
-                    "GPT-SoVITS 服务不可用，降级到 mock 模式"
+                    f"{self.provider} 远程 TTS 服务不可用，降级到 mock 模式"
                 )
                 self.provider = "mock"
         self.logger.info(f"TTS 模块初始化 provider={self.provider}")
@@ -117,7 +118,8 @@ class TTSEngine(BaseModule):
                 audio_path, duration, timestamps = self._synth_mimo(
                     text, voice_id, output_path, speed, volume, pitch, emotion
                 )
-            elif self.provider == "gpt_sovits":
+            elif self.provider in ("gpt_sovits", "cosyvoice"):
+                # 二者共用同一 HTTP 契约（/api/tts/synthesize），后端由 tts_server 决定
                 audio_path, duration, timestamps = self._synth_gpt_sovits(
                     text, voice_id, output_path, speed, volume, pitch, emotion
                 )
@@ -224,7 +226,7 @@ class TTSEngine(BaseModule):
             return self._synth_moss_nano(text, voice_id, output_path, **audio_opts)
         elif self.provider == "mimo":
             return self._synth_mimo(text, voice_id, output_path, **audio_opts)
-        elif self.provider == "gpt_sovits":
+        elif self.provider in ("gpt_sovits", "cosyvoice"):
             return self._synth_gpt_sovits(text, voice_id, output_path, **audio_opts)
         elif self.provider == "edge_tts":
             return self._synth_edge(text, voice_id, output_path, **audio_opts)
@@ -489,18 +491,25 @@ class TTSEngine(BaseModule):
         speed: float | None = None, volume: int | None = None,
         pitch: int | None = None, emotion: str | None = None,
     ) -> tuple[Path, float, list[dict]]:
-        """调用 GPT-SoVITS 云端 API"""
+        """调用远程 TTS 服务（GPT-SoVITS / CosyVoice2 共用契约）合成音频"""
         # emotion 暂不支持，仅 edge_tts 支持情感映射
-        self.logger.info(f"GPT-SoVITS 合成 voice={voice_id} text_len={len(text)} speed={speed}")
+        self.logger.info(
+            f"{self.provider} 合成 voice={voice_id} text_len={len(text)} speed={speed}"
+        )
+        import io
+        import wave
 
         # 分句合成，便于时间戳对齐
         segments = split_text_to_segments(text)
         timestamps: list[dict] = []
-        combined_audio = bytearray()
-        sample_rate = 32000
         offset = 0.0
         # 语速：默认 1.0，支持外部传入精细控制
         tts_speed = speed if speed is not None else 1.0
+
+        # 每段服务端返回的是一个「带完整 RIFF 头的独立 WAV」；不能直接字节拼接
+        # （会得到只有第一段可解码的多头畸形 WAV）。此处解析每段 PCM 帧，最后合成单个合法 WAV。
+        seg_frames: list[bytes] = []
+        wav_params: tuple[int, int, int] | None = None  # (nchannels, sampwidth, framerate)
 
         for seg in segments:
             payload = {
@@ -509,28 +518,45 @@ class TTSEngine(BaseModule):
                 "speed": tts_speed,
             }
             resp = self.gpu.call_tts(payload)
-            # 假设返回 base64 编码的 wav
             audio_b64 = resp.get("audio_base64") or resp.get("data", {}).get("audio_base64")
             if not audio_b64:
-                raise RuntimeError(f"GPT-SoVITS 返回无音频数据: {resp}")
+                raise RuntimeError(f"{self.provider} 返回无音频数据: {resp}")
             audio_bytes = base64.b64decode(audio_b64)
-            combined_audio.extend(audio_bytes)
-            seg_duration = resp.get("duration", estimate_speech_duration(seg))
+
+            try:
+                with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+                    if wav_params is None:
+                        wav_params = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+                    seg_frames.append(wf.readframes(wf.getnframes()))
+                    seg_duration = wf.getnframes() / float(wf.getframerate() or 1)
+            except (wave.Error, EOFError) as e:
+                # 理论上不应发生（服务端恒返回标准 WAV）；容错跳过该段 PCM，按估算记时长
+                self.logger.warning(f"{self.provider} 返回段非标准 WAV，跳过该段 PCM: {e}")
+                seg_duration = resp.get("duration", estimate_speech_duration(seg))
+
             timestamps.append({
                 "text": seg,
                 "start": round(offset, 3),
                 "end": round(offset + seg_duration, 3),
             })
             offset += seg_duration
-            if "sample_rate" in resp:
-                sample_rate = resp["sample_rate"]
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(bytes(combined_audio))
+        if wav_params is not None:
+            nch, sw, fr = wav_params
+            with wave.open(str(output_path), "wb") as out:
+                out.setnchannels(nch)
+                out.setsampwidth(sw)
+                out.setframerate(fr)
+                for frames in seg_frames:
+                    out.writeframes(frames)
+        else:
+            # 所有段都无法解析为 WAV：写第一段原始字节兜底（避免完全无输出）
+            output_path.write_bytes(b"".join(seg_frames) or b"")
         duration = get_wav_duration(output_path) if output_path.exists() else offset
 
         self.logger.info(
-            f"GPT-SoVITS 合成完成 duration={duration:.2f}s segments={len(segments)}"
+            f"{self.provider} 合成完成 duration={duration:.2f}s segments={len(segments)}"
         )
         return output_path, duration, timestamps
 
@@ -658,7 +684,7 @@ class TTSEngine(BaseModule):
         voice_dir = voices_dir / voice_id
         voice_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.provider != "gpt_sovits":
+        if self.provider not in ("gpt_sovits", "cosyvoice"):
             # moss_nano / mimo / edge 模式：本地保存样本音频（moss_nano 用做零样本克隆参考）
             import shutil
             dest = voice_dir / f"sample{sample_audio.suffix or '.wav'}"

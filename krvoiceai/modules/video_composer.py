@@ -397,20 +397,34 @@ class VideoComposer(BaseModule):
         # 根据 scene_scale 调整（仅当 scale != 1.0 时改变行为）
         # scale=1.0 时保持原有铺满逻辑，避免影响现有行为
         if abs(self.scene_scale - 1.0) > 0.01:
-            # 缩放后用 pad 填充（黑边），position 影响偏移
-            # scale<1.0 数字人缩小露出黑边；scale>1.0 放大裁切
             scaled_w = int(w * self.scene_scale)
             scaled_h = int(h * self.scene_scale)
-            if self.scene_position == "left":
-                x_offset, y_offset = "0", "(oh-ih)/2"
-            elif self.scene_position == "right":
-                x_offset, y_offset = "(ow-iw)", "(oh-ih)/2"
-            else:  # center
-                x_offset, y_offset = "(ow-iw)/2", "(oh-ih)/2"
-            filters.append(
-                f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=decrease"
-            )
-            filters.append(f"pad={w}:{h}:{x_offset}:{y_offset}:black")
+            if self.scene_scale > 1.0:
+                # 放大裁切：缩放到 ≥ 目标的尺寸后 crop 到 w×h。
+                # 不能用 pad（pad 目标尺寸小于输入会报 "Padded dimensions cannot be
+                # smaller than input dimensions"，导致整段合成失败）。
+                if self.scene_position == "left":
+                    x_crop = "0"
+                elif self.scene_position == "right":
+                    x_crop = "(iw-ow)"
+                else:  # center
+                    x_crop = "(iw-ow)/2"
+                filters.append(
+                    f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=increase"
+                )
+                filters.append(f"crop={w}:{h}:{x_crop}:(ih-oh)/2")
+            else:
+                # 缩小：缩放后 pad 黑边填充，position 影响偏移
+                if self.scene_position == "left":
+                    x_offset, y_offset = "0", "(oh-ih)/2"
+                elif self.scene_position == "right":
+                    x_offset, y_offset = "(ow-iw)", "(oh-ih)/2"
+                else:  # center
+                    x_offset, y_offset = "(ow-iw)/2", "(oh-ih)/2"
+                filters.append(
+                    f"scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=decrease"
+                )
+                filters.append(f"pad={w}:{h}:{x_offset}:{y_offset}:black")
         else:
             # scale=1.0 时保持原有铺满逻辑
             filters.append(
@@ -594,7 +608,10 @@ class VideoComposer(BaseModule):
         pos = positions.get(self.watermark_position, positions["bottom_right"])
         # 转义水印文字中的特殊字符
         text = self.watermark_text.replace(":", r"\:").replace("'", r"\'")
-        return f"drawtext=text='{text}':fontcolor=white@{alpha}:fontsize={max(16, w//40)}:{pos}:box=1:boxcolor=black@{alpha*0.5}"
+        # 指定中文字体，避免中文水印渲染成方块 / 缺省 fontconfig 的最小化 ffmpeg 报错
+        font_path = self._find_chinese_font()
+        font_opt = f":fontfile='{font_path}'" if font_path else ""
+        return f"drawtext=text='{text}'{font_opt}:fontcolor=white@{alpha}:fontsize={max(16, w//40)}:{pos}:box=1:boxcolor=black@{alpha*0.5}"
 
     def _get_logo_overlay_pos(self, position: str) -> tuple:
         """返回 Logo overlay 的 x, y 坐标表达式

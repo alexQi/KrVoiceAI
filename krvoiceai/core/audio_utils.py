@@ -32,8 +32,13 @@ def generate_silent_wav(
     n_samples = int(duration * sample_rate)
     # 极低幅度噪声（-60dB），避免完全静音
     noise = np.random.randn(n_samples) * 0.001
-    # 转为 16-bit PCM
-    audio = (noise * 32767).astype(np.int16)
+    # 按 sample_width 选择匹配的 PCM dtype，确保数据字节宽与 wav 头一致
+    dtype, peak = {
+        1: (np.int8, 127),
+        2: (np.int16, 32767),
+        4: (np.int32, 2147483647),
+    }.get(sample_width, (np.int16, 32767))
+    audio = (noise * peak).astype(dtype)
     if channels > 1:
         audio = np.tile(audio.reshape(-1, 1), (1, channels))
 

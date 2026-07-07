@@ -317,9 +317,10 @@ class SubtitleEngine(BaseModule):
         r.raise_for_status()
         data = r.json()
 
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        choices = data.get("choices") or []
+        content = choices[0].get("message", {}).get("content", "") if choices else ""
         if not content:
-            self.logger.warning("MiMo ASR 返回空内容，降级到 mock")
+            self.logger.warning("MiMo ASR 返回空内容（或空 choices），降级到 mock")
             return self._generate_mock(ctx)
 
         self.logger.info(f"MiMo ASR 识别结果: {content[:100]}...")

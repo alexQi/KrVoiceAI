@@ -149,6 +149,16 @@ class ScriptExtractor(BaseModule):
         _url_hash = _hashlib.md5(video_url.encode()).hexdigest()[:12]
         _cache_dir = Path(getattr(self, 'work_dir', Path('.'))) / '.extract_cache'
         _cache_file = _cache_dir / f'{_url_hash}.txt'
+
+        def _write_cache(final_text: str) -> None:
+            """缓存清洗后的最终文本（供所有成功返回路径统一调用）"""
+            try:
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                _cache_file.write_text(final_text, encoding='utf-8')
+                self.logger.info(f'提取结果已缓存（URL hash={_url_hash}）')
+            except Exception:
+                pass
+
         if _cache_file.exists():
             _age = time.time() - _cache_file.stat().st_mtime
             if _age < 86400:  # 24小时内的缓存有效
@@ -192,7 +202,9 @@ class ScriptExtractor(BaseModule):
                         text = self._download_and_transcribe(video_dl_url, Path(tmp))
                         if text and len(text) >= 10:
                             self.logger.info(f"视频下载+ASR 转写成功: {len(text)} 字")
-                            return self._clean_text(text)
+                            cleaned = self._clean_text(text)
+                            _write_cache(cleaned)  # 最耗时的成功路径也要缓存
+                            return cleaned
                     except Exception as e:
                         self.logger.warning(f"视频下载+ASR 转写失败: {e}")
 
@@ -246,14 +258,10 @@ class ScriptExtractor(BaseModule):
             except Exception as e:
                 self.logger.warning(f"文章提取失败，降级到 mock: {e}")
                 text = self._extract_mock(video_url)
-        # 写入缓存
-        try:
-            _cache_dir.mkdir(parents=True, exist_ok=True)
-            _cache_file.write_text(text, encoding='utf-8')
-            self.logger.info(f'提取结果已缓存（URL hash={_url_hash}）')
-        except Exception:
-            pass
-        return self._clean_text(text)
+        # 写入缓存（缓存清洗后的最终文本，保证与缓存命中返回的内容一致）
+        final = self._clean_text(text)
+        _write_cache(final)
+        return final
 
     def _extract_from_local_file(self, path: Path) -> str:
         """从本地视频/音频文件提取文案：FFmpeg 提取音频 + ASR 转写"""
@@ -1024,6 +1032,9 @@ class ScriptExtractor(BaseModule):
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            # socket 读取超时：避免半开/卡死连接让 ydl.download 无限阻塞整个 job
+            # （命令行兜底路径有 300s 超时，此处 Python API 主路径此前遗漏）
+            "socket_timeout": 30,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Referer": "https://www.douyin.com/",

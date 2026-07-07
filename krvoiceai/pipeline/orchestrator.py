@@ -171,6 +171,12 @@ class PipelineOrchestrator:
                     self.logger.warning(
                         f"可选步骤 {step_name} 失败，继续执行后续步骤"
                     )
+                    # 覆盖 FAILED→SKIPPED：否则 _find_resume_point 会把这个失败的可选步骤
+                    # 当作续跑起点，导致对已成功 job 重跑时从该步起把后续已成功步骤全部重跑。
+                    self.store.update_step(
+                        job_id, step_name, StepStatus.SKIPPED,
+                        result={"reason": "optional step failed, skipped"},
+                    )
                     continue
                 self.store.update_job_status(
                     job_id, JobStatus.FAILED,

@@ -138,16 +138,20 @@ def _ass_time(seconds: float) -> str:
     """秒数转 ASS 时间格式 H:MM:SS.cc"""
     if seconds < 0:
         seconds = 0
-    cs = round(seconds * 100)
-    if cs >= 6000:  # 100cs = 1s
-        cs = 0
-        seconds += 1
-    total_cs = int(round(seconds * 100))
+    total_cs = int(round(seconds * 100))  # 总厘秒
     h = total_cs // 360000
     m = (total_cs % 360000) // 6000
     s = (total_cs % 6000) // 100
     c = total_cs % 100
     return f"{h}:{m:02d}:{s:02d}.{c:02d}"
+
+
+def _ass_escape(text: str) -> str:
+    """转义 ASS 正文特殊字符，避免 { } \\ 被 libass 当作 override 标签解析。
+
+    注意：只用于用户/ASR 正文；程序自身生成的 \\N、{\\kf..} 等标签不得经过此函数。
+    """
+    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
 def _find_chinese_font() -> str:
@@ -321,8 +325,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 words=seg.get("words"),
             )
         else:
-            # 应用自动折行（长句按标点和字数拆成多行，插入 \\N）
-            wrapped = _wrap_text(seg["text"].strip())
+            # 先转义正文特殊字符，再自动折行（折行插入的 \\N 在转义之后添加，不受影响）
+            wrapped = _wrap_text(_ass_escape(seg["text"].strip()))
             if anim_tag:
                 # 应用动画标签（替换占位符）
                 tag = anim_tag.replace("x,x", f"{play_res_x//2},{play_res_x//2}")
@@ -374,15 +378,15 @@ def _build_karaoke_text(
             if not chars:
                 continue
             if len(chars) == 1:
-                parts.append(f"{{\\kf{dur_cs}}}{chars[0]}")
+                parts.append(f"{{\\kf{dur_cs}}}{_ass_escape(chars[0])}")
             else:
                 per_cs = max(1, dur_cs // len(chars))
                 for i, ch in enumerate(chars):
                     if i == len(chars) - 1:
                         remaining = max(1, dur_cs - per_cs * (len(chars) - 1))
-                        parts.append(f"{{\\kf{remaining}}}{ch}")
+                        parts.append(f"{{\\kf{remaining}}}{_ass_escape(ch)}")
                     else:
-                        parts.append(f"{{\\kf{per_cs}}}{ch}")
+                        parts.append(f"{{\\kf{per_cs}}}{_ass_escape(ch)}")
         if parts:
             return "".join(parts)
         # 词级时间戳为空，落入下面均分兜底
@@ -403,7 +407,7 @@ def _build_karaoke_text(
             dur = max(1, remaining)
         else:
             dur = per_char_cs
-        parts.append(f"{{\\kf{dur}}}{ch}")
+        parts.append(f"{{\\kf{dur}}}{_ass_escape(ch)}")
 
     return "".join(parts)
 

@@ -114,53 +114,71 @@ class OriginalityChecker(BaseModule):
         try:
             start = time.time()
             normalized = normalize_text(text)
-            fingerprint = simhash(text)
             report: dict[str, Any] = {
                 "char_count": len(text),
-                "simhash": fingerprint,
             }
+            fingerprint: int | None = None
 
-            # === 1. SimHash 查重（与历史库比对）===
-            dup_hit = self._check_duplicate(fingerprint)
-            if dup_hit:
-                report["duplicate"] = dup_hit
+            # === 1. SimHash 查重（可容忍降级：异常仅跳过查重，不得阻断下面的违禁词检测）===
+            try:
+                fingerprint = simhash(text)
+                report["simhash"] = fingerprint
+                dup_hit = self._check_duplicate(fingerprint)
+                if dup_hit:
+                    report["duplicate"] = dup_hit
+                    return ModuleResult(
+                        success=False,
+                        error=(
+                            f"文案与历史相似度过高（{dup_hit['similarity']:.1%}，"
+                            f"job={dup_hit['job_id']}），建议重新仿写"
+                        ),
+                        data=report,
+                    )
+            except Exception as sh_err:
+                self.logger.warning(f"SimHash 查重降级跳过（不影响违禁词检测）：{sh_err}")
+
+            # === 2. 违禁词扫描（确定性本地检测，fail-closed：扫描异常一律拦截，绝不放行）===
+            try:
+                banned_hits = self._scan_banned_words(text)
+            except Exception as scan_err:
+                self.logger.error(f"违禁词扫描异常，安全拦截（fail-closed）：{scan_err}")
                 return ModuleResult(
                     success=False,
-                    error=(
-                        f"文案与历史相似度过高（{dup_hit['similarity']:.1%}，"
-                        f"job={dup_hit['job_id']}），建议重新仿写"
-                    ),
-                    data=report,
+                    error=f"违禁词扫描异常，已拦截以防漏检：{scan_err}",
+                    data={"banned_scan_error": str(scan_err)},
                 )
-
-            # === 2. 违禁词扫描 ===
-            banned_hits = self._scan_banned_words(text)
             if banned_hits:
                 # 自动修正：调 LLM 去掉违禁词（避免流程卡死在重试）
+                # 一旦命中违禁词，修正/重扫过程中的任何异常都必须保持拦截，绝不 fail-open 放行。
                 if self.auto_fix_banned and not self.llm.is_mock:
-                    fixed = self._auto_fix_banned_words(text, banned_hits)
-                    if fixed and fixed != text:
-                        # 修正后重新扫描
-                        new_hits = self._scan_banned_words(fixed)
-                        if not new_hits:
-                            self.logger.info(
-                                f"违禁词自动修正成功: {banned_hits} -> 已替换，"
-                                f"文案 {len(text)}字 -> {len(fixed)}字"
-                            )
-                            text = fixed
-                            ctx.script_text = text
-                            normalized = normalize_text(text)
-                            fingerprint = simhash(text)
-                            report["banned_auto_fixed"] = banned_hits
-                            report["char_count"] = len(text)
-                            report["simhash"] = fingerprint
-                            # 跳过下面的失败返回，继续走 LLM 风控
-                            banned_hits = []
-                            report.pop("banned_words", None)
-                        else:
-                            self.logger.warning(
-                                f"违禁词自动修正后仍命中: {new_hits}"
-                            )
+                    try:
+                        fixed = self._auto_fix_banned_words(text, banned_hits)
+                        if fixed and fixed != text:
+                            new_hits = self._scan_banned_words(fixed)
+                            if not new_hits:
+                                self.logger.info(
+                                    f"违禁词自动修正成功: {banned_hits} -> 已替换，"
+                                    f"文案 {len(text)}字 -> {len(fixed)}字"
+                                )
+                                text = fixed
+                                ctx.script_text = text
+                                normalized = normalize_text(text)
+                                try:
+                                    fingerprint = simhash(text)
+                                    report["simhash"] = fingerprint
+                                except Exception:
+                                    fingerprint = None
+                                report["banned_auto_fixed"] = banned_hits
+                                report["char_count"] = len(text)
+                                # 跳过下面的失败返回，继续走 LLM 风控
+                                banned_hits = []
+                                report.pop("banned_words", None)
+                            else:
+                                self.logger.warning(
+                                    f"违禁词自动修正后仍命中: {new_hits}"
+                                )
+                    except Exception as fix_err:
+                        self.logger.warning(f"违禁词自动修正异常，保持拦截：{fix_err}")
                 if banned_hits:
                     report["banned_words"] = banned_hits
                     preview = "、".join(banned_hits[:self.banned_words_max_report])
@@ -181,8 +199,9 @@ class OriginalityChecker(BaseModule):
                         data=report,
                     )
 
-            # === 全部通过：写入历史库 ===
-            self._save_to_history(ctx.job_id, text, fingerprint)
+            # === 全部通过：写入历史库（fingerprint 缺失时跳过，不影响放行）===
+            if fingerprint is not None:
+                self._save_to_history(ctx.job_id, text, fingerprint)
             report["status"] = "passed"
             report["elapsed"] = round(time.time() - start, 3)
             ctx.metadata["originality"] = report
