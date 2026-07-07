@@ -63,7 +63,8 @@ def main():
 
     # web - 启动 Web UI（推荐，现代化界面，对标旗博士）
     p_web = sub.add_parser("web", help="启动 Web UI（推荐，现代化界面）")
-    p_web.add_argument("--host", default="0.0.0.0")
+    p_web.add_argument("--host", default="127.0.0.1",
+                       help="默认仅本机访问；跨机访问传 0.0.0.0（服务无鉴权，仅限可信网络）")
     p_web.add_argument("--port", type=int, default=8000)
 
     # health - 健康检查

@@ -160,10 +160,11 @@ class TemplateApplyRequest(BaseModel):
 def create_app() -> FastAPI:
     app = FastAPI(title="EnlyAI", version="0.2.0")
 
-    # CORS
+    # CORS：仅放行本机来源（默认绑 127.0.0.1）。本服务无鉴权，不应对任意源开放。
+    # 如需跨机浏览器访问，请在此按需追加可信来源。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -1424,12 +1425,21 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def launch(host: str = "0.0.0.0", port: int = 8000) -> None:
-    """启动 Web 服务"""
+def launch(host: str = "127.0.0.1", port: int = 8000) -> None:
+    """启动 Web 服务（默认仅本机访问；跨机访问需显式传 host=0.0.0.0）"""
     import uvicorn
     logger.info(f"启动 Web 服务: http://{host}:{port}")
+    if host == "0.0.0.0":
+        logger.warning(
+            "Web 服务绑定 0.0.0.0（对外暴露），而本服务无鉴权——请仅在可信网络使用"
+        )
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
-    launch()
+    import argparse
+    _p = argparse.ArgumentParser(description="EnlyAI Web Server")
+    _p.add_argument("--host", default="127.0.0.1", help="默认仅本机；跨机访问传 0.0.0.0")
+    _p.add_argument("--port", type=int, default=8000)
+    _a = _p.parse_args()
+    launch(host=_a.host, port=_a.port)
