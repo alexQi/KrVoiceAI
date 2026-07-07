@@ -254,6 +254,7 @@ class ScriptExtractor(BaseModule):
                         self._last_extract_degraded = True
                     else:
                         text = self._extract_mock(video_url)
+                        self._last_extract_degraded = True  # mock 占位文案不缓存
         else:
             # 文章链接：直接抓取网页正文
             try:
@@ -261,6 +262,7 @@ class ScriptExtractor(BaseModule):
             except Exception as e:
                 self.logger.warning(f"文章提取失败，降级到 mock: {e}")
                 text = self._extract_mock(video_url)
+                self._last_extract_degraded = True  # mock 占位文案不缓存
         # 写入缓存（仅缓存真实结果；降级/mock 文案不缓存，避免瞬时故障恢复后仍返回假文案）
         final = self._clean_text(text)
         if not self._last_extract_degraded:
