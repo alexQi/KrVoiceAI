@@ -35,6 +35,35 @@ def _get_app() -> EnlyAI:
     return _app_instance
 
 
+def _allowed_roots() -> list[Path]:
+    """允许被 API 读取/处理的根目录白名单：工作区 + 系统临时目录。"""
+    roots: list[Path] = []
+    try:
+        from ..core.config import get_config
+        wr = get_config().get("project.work_root", "./workspace_data")
+        roots.append(Path(wr).resolve())
+    except Exception:
+        roots.append(Path("./workspace_data").resolve())
+    roots.append(Path(tempfile.gettempdir()).resolve())
+    return roots
+
+
+def _resolve_within_roots(path_str: str) -> Optional[Path]:
+    """解析路径并校验其位于白名单根目录内；越界或非法返回 None。
+
+    用 resolve() + is_relative_to 前缀校验，替代脆弱的子串匹配（'tmp' in path），
+    避免 /tmp 全树、含 'tmp'/'workspace_data' 子串的任意路径被越权访问。
+    """
+    try:
+        p = Path(path_str).resolve()
+    except Exception:
+        return None
+    for root in _allowed_roots():
+        if p == root or p.is_relative_to(root):
+            return p
+    return None
+
+
 # ============ 请求模型 ============
 
 class GenerateRequest(BaseModel):
@@ -353,7 +382,9 @@ def create_app() -> FastAPI:
         loop = asyncio.get_event_loop()
 
         def _apply():
-            video = Path(video_path)
+            video = _resolve_within_roots(video_path)
+            if video is None:
+                return {"success": False, "error": "无权访问该路径"}
             if not video.exists():
                 return {"success": False, "error": "视频不存在"}
             try:
@@ -483,7 +514,9 @@ def create_app() -> FastAPI:
         loop = asyncio.get_event_loop()
 
         def _edit():
-            video = Path(video_path)
+            video = _resolve_within_roots(video_path)
+            if video is None:
+                return {"success": False, "error": "无权访问该路径"}
             if not video.exists():
                 return {"success": False, "error": "视频不存在"}
             try:
@@ -527,11 +560,14 @@ def create_app() -> FastAPI:
     ):
         # 保存上传文件到临时位置
         suffix = Path(file.filename or "ref.mp4").suffix or ".mp4"
-        tmp = Path(tempfile.mktemp(suffix=suffix))
-        with open(tmp, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        ok = _get_app().register_avatar(avatar_id, tmp)
-        tmp.unlink(missing_ok=True)
+        fd, tmp_name = tempfile.mkstemp(suffix=suffix)
+        tmp = Path(tmp_name)
+        try:
+            with open(fd, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            ok = _get_app().register_avatar(avatar_id, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)  # 异常路径下也清理，避免临时文件累积
         return {"success": ok, "avatar_id": avatar_id}
 
     @app.get("/api/voices")
@@ -544,22 +580,25 @@ def create_app() -> FastAPI:
         file: UploadFile = File(...),
     ):
         suffix = Path(file.filename or "sample.wav").suffix or ".wav"
-        tmp = Path(tempfile.mktemp(suffix=suffix))
-        with open(tmp, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        ok = _get_app().register_voice(voice_id, tmp)
-        tmp.unlink(missing_ok=True)
+        fd, tmp_name = tempfile.mkstemp(suffix=suffix)
+        tmp = Path(tmp_name)
+        try:
+            with open(fd, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+            ok = _get_app().register_voice(voice_id, tmp)
+        finally:
+            tmp.unlink(missing_ok=True)  # 异常路径下也清理，避免临时文件累积
         return {"success": ok, "voice_id": voice_id}
 
     # 文件下载（视频/封面等）
     @app.get("/api/files")
     async def get_file(path: str):
-        p = Path(path)
+        # 安全检查：resolve 后必须落在白名单根目录内（工作区/临时目录），防止越权读任意文件
+        p = _resolve_within_roots(path)
+        if p is None:
+            raise HTTPException(403, "无权访问")
         if not p.exists() or not p.is_file():
             raise HTTPException(404, "文件不存在")
-        # 安全检查：只允许访问 workspace_data 目录
-        if "workspace_data" not in str(p.resolve()) and "tmp" not in str(p.resolve()):
-            raise HTTPException(403, "无权访问")
         return FileResponse(str(p))
 
     # ============ 设置中心 API ============
