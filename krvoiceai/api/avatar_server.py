@@ -7,22 +7,28 @@
 在云 GPU 上启动此服务，提供数字人口播生成 API。
 本地 EnlyAI 通过 GPURunner 调用此服务。
 
-启动方式：
+启动方式（用 LatentSync 环境的 python，确保子进程能跑通官方推理脚本）：
+    LATENTSYNC_DIR=/path/to/LatentSync \
+    AVATAR_BACKEND=latentsync CUDA_VISIBLE_DEVICES=0 \
     python -m krvoiceai.api.avatar_server --port 8010 --backend latentsync
 
-依赖（云端安装）：
-    pip install fastapi uvicorn torch torchvision
-    # LatentSync（推荐）：
-    git clone https://github.com/bytedance/LatentSync.git && cd LatentSync && pip install -e .
+依赖（云端安装，参考 scripts/setup_cloud_gpu.sh 一键安装）：
+    pip install fastapi uvicorn
+    # LatentSync（推荐，本服务用子进程调其 scripts/inference.py，对版本鲁棒）：
+    git clone https://github.com/bytedance/LatentSync.git
+    cd LatentSync && pip install -e . && bash setup_env.sh   # setup_env.sh 下载 UNet/whisper 权重
+    # 关键环境变量：LATENTSYNC_DIR（仓库根）/ LATENTSYNC_CKPT / LATENTSYNC_CONFIG
+    #             LATENTSYNC_CONFIG_512（可选高清配置）/ LATENTSYNC_GUIDANCE（默认 1.5）
     # 或 MuseTalk（备选）：
     pip install musetalk opencv-python
-    参考 scripts/setup_cloud_gpu.sh 一键安装
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import os
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -79,63 +85,102 @@ def _get_avatar_backend():
 
 
 def _load_latentsync():
-    """加载 LatentSync 1.5 后端
+    """加载 LatentSync 1.5 后端（子进程方式调用官方 scripts/inference.py）
 
     LatentSync 是字节跳动开源的潜在扩散唇同步模型，口型质量超过 MuseTalk。
+    它不是 pip 包，而是一个 Git 仓库（config yaml + checkpoint + scripts/inference.py）。
+    这里用「子进程调官方推理脚本」而非 import 内部类，对版本变动最鲁棒。
+
+    需要的环境变量（部署时设置，见 docs/GPU_UPGRADE.md §2）：
+      LATENTSYNC_DIR     LatentSync 仓库根目录（默认 ./LatentSync）
+      LATENTSYNC_CKPT    UNet 权重（默认 <DIR>/checkpoints/latentsync_unet.pt）
+      LATENTSYNC_CONFIG  UNet 配置 yaml（默认 <DIR>/configs/unet/stage2.yaml）
+      LATENTSYNC_CONFIG_512  高清 512 配置（可选，config_name=high_quality 时优先用）
+      LATENTSYNC_GUIDANCE    guidance_scale（默认 1.5）
     参考：https://github.com/bytedance/LatentSync
     """
-    try:
-        # LatentSync 的入口根据版本可能不同，这里用宽松导入
-        from latentsync import LatentSyncPipeline
-        config_name = os.environ.get("LATENTSYNC_CONFIG", "high_quality")
-        pipe = LatentSyncPipeline.from_pretrained(
-            "latent-sync-1.5",
-            config=config_name,
-        )
-        print(f"[info] LatentSync 后端加载成功 config={config_name}")
-        return _LatentSyncWrapper(pipe)
-    except ImportError:
-        print("[warn] LatentSync 未安装，使用 ffmpeg 占位降级")
-        print("[info] 安装方法：git clone https://github.com/bytedance/LatentSync && pip install -e .")
+    repo_dir = Path(os.environ.get("LATENTSYNC_DIR", "./LatentSync")).resolve()
+    ckpt = Path(os.environ.get(
+        "LATENTSYNC_CKPT", str(repo_dir / "checkpoints" / "latentsync_unet.pt")
+    ))
+    config = Path(os.environ.get(
+        "LATENTSYNC_CONFIG", str(repo_dir / "configs" / "unet" / "stage2.yaml")
+    ))
+    inference_module = repo_dir / "scripts" / "inference.py"
+
+    missing = [str(p) for p in (repo_dir, inference_module, ckpt, config) if not p.exists()]
+    if missing:
+        print(f"[warn] LatentSync 未就绪，缺少：{missing}，使用 ffmpeg 占位降级")
+        print("[info] 安装：git clone https://github.com/bytedance/LatentSync && "
+              "cd LatentSync && pip install -e . && bash setup_env.sh（下载权重）")
+        print("[info] 设置 LATENTSYNC_DIR 指向仓库根目录")
         return None
-    except Exception as e:
-        print(f"[warn] LatentSync 加载失败：{e}，使用 ffmpeg 占位降级")
-        return None
+
+    print(f"[info] LatentSync 后端就绪 repo={repo_dir} ckpt={ckpt.name} config={config.name}")
+    return _LatentSyncWrapper(repo_dir, ckpt, config)
 
 
 class _LatentSyncWrapper:
-    """LatentSync 统一接口封装"""
+    """LatentSync 统一接口封装（子进程调用官方 scripts/inference.py）"""
 
-    def __init__(self, pipe):
-        self.pipe = pipe
+    def __init__(self, repo_dir: Path, ckpt: Path, config: Path):
+        self.repo_dir = repo_dir
+        self.ckpt = ckpt
+        self.config = config
+        self.config_512 = os.environ.get("LATENTSYNC_CONFIG_512", "")
+        self.guidance = os.environ.get("LATENTSYNC_GUIDANCE", "1.5")
 
     def generate(
         self, audio_path: str, avatar_id: str,
         output_path: str, inference_steps: int = 25,
-        resolution: int = 512, **kwargs,
+        resolution: int = 512, config_name: str | None = None, **kwargs,
     ) -> str:
-        """调用 LatentSync 推理
+        """调用 LatentSync 官方推理脚本
 
         Args:
-            audio_path: 输入音频路径
+            audio_path: 输入音频路径（wav）
             avatar_id: 形象 ID（对应 _avatars_dir/<id>/reference.mp4）
             output_path: 输出视频路径
-            inference_steps: 扩散步数（25 平衡，50 最高，10 最快）
-            resolution: 处理分辨率（512 推荐）
+            inference_steps: 扩散步数（20-25 平衡，50 最高，10 最快）
+            resolution: 处理分辨率（512 高清 / 256 更快）；仅用于选配置文件
+            config_name: high_quality / fast（high_quality 优先用 512 配置）
 
         Returns:
             输出视频路径
         """
         ref_video = self._get_reference_video(avatar_id)
-        # LatentSync 真实调用（接口根据实际版本调整）
-        result = self.pipe.generate(
-            video_path=ref_video,
-            audio_path=audio_path,
-            output_path=output_path,
-            inference_steps=inference_steps,
-            resolution=resolution,
+
+        # 高清 512 配置：显式指定 config_name=high_quality 或 resolution>=512 时优先
+        unet_config = self.config
+        want_hq = (config_name == "high_quality") or (resolution and resolution >= 512)
+        if want_hq and self.config_512 and Path(self.config_512).exists():
+            unet_config = Path(self.config_512)
+
+        cmd = [
+            sys.executable, "-m", "scripts.inference",
+            "--unet_config_path", str(unet_config),
+            "--inference_ckpt_path", str(self.ckpt),
+            "--inference_steps", str(int(inference_steps)),
+            "--guidance_scale", str(self.guidance),
+            "--video_path", str(ref_video),
+            "--audio_path", str(audio_path),
+            "--video_out_path", str(output_path),
+        ]
+        seed = kwargs.get("seed")
+        if seed is not None and int(seed) >= 0:
+            cmd += ["--seed", str(int(seed))]
+
+        print(f"[info] LatentSync 推理: steps={inference_steps} "
+              f"config={unet_config.name} ref={Path(ref_video).name}")
+        r = subprocess.run(
+            cmd, cwd=str(self.repo_dir),
+            capture_output=True, text=True,
         )
-        return result if isinstance(result, str) else output_path
+        if r.returncode != 0 or not Path(output_path).exists():
+            raise RuntimeError(
+                f"LatentSync 推理失败 rc={r.returncode}: {r.stderr[-800:]}"
+            )
+        return output_path
 
     @staticmethod
     def _get_reference_video(avatar_id: str) -> str:

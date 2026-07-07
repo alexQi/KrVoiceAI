@@ -94,9 +94,24 @@ pip install fastapi==0.111.0 uvicorn[standard]==0.30.1 \
     pydantic==2.7.1 httpx==0.27.0 loguru==0.7.2 \
     Pillow==10.3.0 numpy==1.26.4 soundfile==0.12.1
 
-# 6. 安装 GPT-SoVITS
+# 6. 安装 CosyVoice2（推荐，TTS 主引擎，backend=cosyvoice）
+if [ ! -d "$WORKSPACE_DIR/CosyVoice" ]; then
+    log "克隆 CosyVoice2（阿里 FunAudioLLM，零样本声音克隆）..."
+    cd "$WORKSPACE_DIR"
+    git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git
+    cd CosyVoice
+    git submodule update --init --recursive  # 含 third_party/Matcha-TTS
+    pip install -r requirements.txt
+    # 下载 CosyVoice2-0.5B 权重到 pretrained_models/
+    python -c "from modelscope import snapshot_download; snapshot_download('iic/CosyVoice2-0.5B', local_dir='pretrained_models/CosyVoice2-0.5B')" \
+        || warn "CosyVoice2-0.5B 权重下载失败，请手动下载到 CosyVoice/pretrained_models/CosyVoice2-0.5B"
+else
+    log "CosyVoice 已存在，跳过克隆"
+fi
+
+# 6b. 安装 GPT-SoVITS（备选 TTS 后端）
 if [ ! -d "$WORKSPACE_DIR/GPT-SoVITS" ]; then
-    log "克隆 GPT-SoVITS..."
+    log "克隆 GPT-SoVITS（备选）..."
     cd "$WORKSPACE_DIR"
     git clone https://github.com/RVC-Boss/GPT-SoVITS.git
     cd GPT-SoVITS
@@ -149,8 +164,14 @@ VOICES_DIR=$WORKSPACE_DIR/config/voices
 AVATARS_DIR=$WORKSPACE_DIR/config/avatars
 MODELS_DIR=$MODELS_DIR
 PYTHONPATH=$WORKSPACE_DIR
+# TTS 后端：cosyvoice（推荐）/ gpt_sovits（备选）
+TTS_BACKEND=cosyvoice
+COSYVOICE_DIR=$WORKSPACE_DIR/CosyVoice
 # 数字人后端：latentsync（推荐）/ musetalk（备选）
 AVATAR_BACKEND=latentsync
+LATENTSYNC_DIR=$WORKSPACE_DIR/LatentSync
+# LatentSync 高清 512 配置（若仓库提供，取消注释指向实际路径）
+# LATENTSYNC_CONFIG_512=$WORKSPACE_DIR/LatentSync/configs/unet/stage2_512.yaml
 EOF
 
 log "安装完成！"
@@ -158,10 +179,12 @@ echo ""
 echo "=========================================="
 echo " 下一步："
 echo " 1. cd $WORKSPACE_DIR"
-echo " 2. source .venv/bin/activate"
-echo " 3. 启动 TTS 服务: python -m krvoiceai.api.tts_server --port 9880"
-echo " 4. 启动数字人服务（默认 LatentSync）: python -m krvoiceai.api.avatar_server --port 8010 --backend latentsync"
+echo " 2. source .venv/bin/activate && set -a && source .env.cloud && set +a"
+echo " 3. 启动 TTS 服务（CosyVoice2）: TTS_BACKEND=cosyvoice CUDA_VISIBLE_DEVICES=6 python -m krvoiceai.api.tts_server --port 9880 --backend cosyvoice"
+echo " 4. 启动数字人服务（LatentSync）: AVATAR_BACKEND=latentsync CUDA_VISIBLE_DEVICES=0 python -m krvoiceai.api.avatar_server --port 8010 --backend latentsync"
 echo "    备选 MuseTalk: python -m krvoiceai.api.avatar_server --port 8010 --backend musetalk"
-echo " 5. 本地 EnlyAI 配置 gpu_runner.tts_endpoint 和 avatar_endpoint 指向本机"
-echo " 6. 本地切换高质量模式：config 中 avatar.provider 改为 latentsync"
+echo " 5. 8 卡并行：给每个副本设不同 CUDA_VISIBLE_DEVICES 和端口（见 docs/GPU_UPGRADE.md §4/§8）"
+echo " 6. 本地 EnlyAI 用 config/user_config.yaml：取消 avatar.provider: latentsync / tts.provider: cosyvoice 注释，"
+echo "    并把 gpu_runner.tts_endpoint / avatar_endpoint 指向本机（同机为 127.0.0.1）"
+echo " 7. 健康检查: curl localhost:9880/health && curl localhost:8010/health（看 backend_ready:true）"
 echo "=========================================="

@@ -1,0 +1,73 @@
+# EnlyAI 用户配置覆盖（模板）—— 部署目标机专用：86 核 / 8×RTX 3090
+#
+# 【用法】user_config.yaml 被 .gitignore 忽略、不随 git 走。到目标机后执行：
+#     cp config/user_config.gpu.example.yaml config/user_config.yaml
+# 待 LatentSync / CosyVoice 服务起好并 /health 返回 backend_ready:true 后，
+# 取消下方 avatar.provider / tts.provider 两行注释即启用高质量引擎。
+#
+# 加载优先级：环境变量 > 本文件 > config/default.yaml（deep-merge，只需写要覆盖的项）
+#
+# ⚠️ 本文件把 whisper / GFPGAN / TTS / Wav2Lip 全部切到 CUDA。
+#    请勿在无 NVIDIA GPU 的机器上使用（会导致相应模块初始化失败）。
+#    无卡环境请删除本文件，回落到 default.yaml 的安全 CPU 基线。
+#
+# 配套方案见 docs/GPU_UPGRADE.md。
+
+# ── 字幕 / ASR：faster-whisper 切 GPU + 升级 large-v3（纯配置，已可用）──
+asr:
+  whisper:
+    model_size: large-v3     # small → large-v3，最准；3090 fp16 轻松
+    device: cuda
+    compute_type: float16    # GPU 用 float16（CPU 才用 int8）
+    beam_size: 5
+
+# ── 人脸增强：GFPGAN 切 GPU（纯配置，已可用）──
+#    有 LatentSync 512px 输出后，GFPGAN 通常可不开；如需更锐化脸部再置 enabled: true。
+avatar:
+  gfpgan:
+    device: cuda
+
+  # ── Wav2Lip 作为 LatentSync 未就绪时的「GPU 降级」路径 ──
+  #    需 wav2lip_env 重装 CUDA 版 torch（见 scripts/setup_wav2lip_env.bat gpu）。
+  wav2lip:
+    device: cuda
+
+  # ── 数字人主引擎：LatentSync 1.5（服务化）──
+  #    P2 完成（部署 avatar_server + 接真实推理）后，取消下面 provider 注释启用。
+  #    详见 docs/GPU_UPGRADE.md §2。
+  # provider: latentsync
+  api_base: http://127.0.0.1:8010    # avatar_server 地址（同机 localhost）
+  latentsync:
+    config: high_quality
+    inference_steps: 25
+    resolution: 512
+
+# ── TTS：MOSS-Nano 降级路径切 GPU；主引擎 CosyVoice2 待 P3 ──
+tts:
+  # MOSS-Nano ONNX 切 CUDA（需 pip install onnxruntime-gpu），作为降级用
+  moss_nano:
+    execution_provider: cuda
+    cpu_threads: 16          # 86 核，放宽
+
+  # ── 声音克隆主引擎：CosyVoice2（服务化）──
+  #    P3 完成（tts_server 加 _load_cosyvoice + tts_engine 加 provider）后启用。
+  #    在服务接口统一的前提下，可直接复用 gpt_sovits 客户端指向 CosyVoice 服务。
+  #    详见 docs/GPU_UPGRADE.md §3。
+  # provider: cosyvoice
+  api_base: http://127.0.0.1:9880    # tts_server 地址（同机 localhost）
+
+# ── GPU 推理服务端点（gpu_runner 用；同机指向 localhost）──
+gpu_runner:
+  tts_endpoint: http://127.0.0.1:9880
+  avatar_endpoint: http://127.0.0.1:8010
+
+# ── 编排：多卡并行（先跑通再压并发；见 docs/GPU_UPGRADE.md §4）──
+#    提到 avatar 副本数上限（示例 6 副本→concurrency: 6）前，先确认 SQLite 并发写安全。
+pipeline:
+  gpu_enabled: true
+  concurrency: 1             # 部署好多副本 + LB 后再调高到副本数
+  max_retries: 3
+
+# ── LLM：保留 DeepSeek 云 API（按决策不自托管）；仅需在此填 key 或用环境变量 ──
+# llm:
+#   api_key: "在此填 DeepSeek key，或用环境变量 KRVOICEAI_LLM_API_KEY"
