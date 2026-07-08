@@ -32,10 +32,10 @@ RUN pip install --no-cache-dir -e . && pip install --no-cache-dir fastapi uvicor
 # 放在末尾独立层：改动它不会使前面昂贵的依赖层缓存失效。
 RUN rm -f /opt/conda/bin/ffmpeg /opt/conda/bin/ffprobe
 
-# 装 cudnn9：基础镜像只有 cudnn8，而 onnxruntime-gpu(insightface 人脸检测)需要 libcudnn.so.9，
-# 否则回退 CPU(慢)。放 LD_LIBRARY_PATH 让 onnxruntime dlopen 到它；torch 用自带 cudnn8 不受影响。
-RUN pip install --no-cache-dir nvidia-cudnn-cu12
-ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.10/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
+# 注：insightface 人脸检测的 onnxruntime 在本镜像(cuda12+torch自带cudnn8)下用 GPU 需精确匹配
+# cudnn/cublas 库，尝试过 cudnn9(顶坏 torch 导致 hang)与 onnxruntime 降级(缺 cublasLt)均不成，
+# 故保持 CPU 回退（能出片，人脸检测非瓶颈）。如需 GPU 提速，后续用 cuda12-cudnn8 匹配的
+# onnxruntime-gpu wheel + 对应 LD_LIBRARY_PATH 单独验证。
 
 ENV LATENTSYNC_DIR=/opt/LatentSync \
     LATENTSYNC_CKPT=/opt/LatentSync/checkpoints/latentsync_unet.pt \
