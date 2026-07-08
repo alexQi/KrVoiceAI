@@ -1,0 +1,31 @@
+# LatentSync 常驻数字人 worker 镜像（M1）
+# 仓库+依赖 baked 进镜像（可复现）；权重体积大，走宿主 volume 挂载到 /opt/LatentSync/checkpoints
+FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ffmpeg libgl1 libglib2.0-0 libsndfile1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# LatentSync 仓库 + 依赖（首次构建可能需按实际版本微调 requirements）
+RUN git clone https://github.com/bytedance/LatentSync.git /opt/LatentSync
+WORKDIR /opt/LatentSync
+RUN pip install --no-cache-dir -r requirements.txt || \
+    echo "[warn] LatentSync requirements 安装有告警，构建后请在容器内核对"
+
+# EnlyAI 主包
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY krvoiceai ./krvoiceai
+RUN pip install --no-cache-dir -e . && pip install --no-cache-dir fastapi uvicorn
+
+ENV LATENTSYNC_DIR=/opt/LatentSync \
+    LATENTSYNC_CKPT=/opt/LatentSync/checkpoints/latentsync_unet.pt \
+    LATENTSYNC_CONFIG=/opt/LatentSync/configs/unet/stage2.yaml \
+    LATENTSYNC_WHISPER_CKPT=/opt/LatentSync/checkpoints/whisper/tiny.pt \
+    AVATARS_DIR=/app/config/avatars \
+    LATENTSYNC_MODE=resident
+
+EXPOSE 8010
+# 端口由 compose 覆盖（--port）
+CMD ["python", "-m", "krvoiceai.api.avatar_worker", "--host", "0.0.0.0", "--port", "8010"]

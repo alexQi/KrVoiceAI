@@ -1,94 +1,90 @@
-# EnlyAI Docker Compose 编排
+# EnlyAI 企业级 GPU 部署（8×RTX 3090）
 #
-# 用途：一键启动本地 EnlyAI + 云端 GPU 服务
+# 拓扑：web(CPU) + 6×avatar worker(LatentSync, 钉 GPU0-5) + 2×tts(CosyVoice2, 钉 GPU6-7)
 #
-# 使用方式：
-#   docker-compose up -d                    # 启动本地服务
-#   docker-compose --profile gpu up -d      # 同时启动 GPU 服务（需在 GPU 机器上）
+# 前置（宿主机一次性）：
+#   bash docker/provision_models.sh          # 下载 CosyVoice2 / LatentSync 权重到 ./deploy_models
+# 部署：
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml up -d
 #
-# 说明：
-#   - local: 本地 CPU 服务（Web UI + CLI），使用 mock 模式或调用云端 GPU
-#   - tts: 云端 TTS 服务（GPT-SoVITS），需 GPU
-#   - avatar: 云端数字人服务（MuseTalk），需 GPU
+# 注意：单条视频多卡分片(scatter-gather)需 M2 的 gpu_pool 客户端；本编排先把 6 个常驻
+# avatar worker + 2 个 tts 全部拉起（各占一卡），web 暂指向 avatar-0/tts-0。M2 落地后
+# web 改指向 worker 池做多卡分片。
 
-version: "3.9"
+x-avatar-common: &avatar-common
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.avatar
+  image: krvoiceai:avatar
+  restart: unless-stopped
+  networks: [krvoiceai-net]
+  volumes:
+    - ./deploy_models/LatentSync/checkpoints:/opt/LatentSync/checkpoints
+    - ../config/avatars:/app/config/avatars
+  environment:
+    - LATENTSYNC_MODE=resident
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8010/health')"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 180s
+
+x-tts-common: &tts-common
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.tts
+  image: krvoiceai:tts
+  restart: unless-stopped
+  networks: [krvoiceai-net]
+  volumes:
+    - ./deploy_models/CosyVoice/pretrained_models:/opt/CosyVoice/pretrained_models
+    - ../config/voices:/app/config/voices
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:9880/health')"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 180s
+
+x-gpu: &gpu-reservation
+  driver: nvidia
+  capabilities: [gpu]
 
 services:
-  # 本地服务（CPU）
-  local:
+  # ── Web / 编排（CPU）──
+  web:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile.local
-    image: krvoiceai:local
-    container_name: krvoiceai-local
+    image: krvoiceai:web
+    container_name: krvoiceai-web
     ports:
-      - "8000:8000"  # Web UI（推荐，现代化界面）
-      - "7860:7860"  # Gradio UI（备用）
+      - "8000:8000"
     volumes:
-      - ./workspace_data:/app/workspace_data
-      - ./config:/app/config
+      - ../workspace_data:/app/workspace_data
+      - ../config:/app/config
     environment:
-      - KRVOICEAI_GPU_RUNNER_TTS_ENDPOINT=${TTS_ENDPOINT:-http://tts:9880}
-      - KRVOICEAI_GPU_RUNNER_AVATAR_ENDPOINT=${AVATAR_ENDPOINT:-http://avatar:8010}
-    networks:
-      - krvoiceai-net
+      - KRVOICEAI_GPU_RUNNER_AVATAR_ENDPOINT=http://avatar-0:8010
+      - KRVOICEAI_GPU_RUNNER_TTS_ENDPOINT=http://tts-0:9880
+      - KRVOICEAI_AVATAR_PROVIDER=latentsync
+      - KRVOICEAI_TTS_PROVIDER=cosyvoice
+    networks: [krvoiceai-net]
     restart: unless-stopped
+    command: ["python", "-m", "krvoiceai.web.server", "--host", "0.0.0.0", "--port", "8000"]
 
-  # 云端 TTS 服务（GPU）
-  tts:
-    profiles: ["gpu"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.gpu
-    image: krvoiceai:gpu
-    container_name: krvoiceai-tts
-    ports:
-      - "9880:9880"
-    volumes:
-      - ./models:/app/models
-      - ./config/voices:/app/config/voices
-    environment:
-      - VOICES_DIR=/app/config/voices
-      - MODELS_DIR=/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: ["python", "-m", "krvoiceai.api.tts_server", "--host", "0.0.0.0", "--port", "9880"]
-    networks:
-      - krvoiceai-net
-    restart: unless-stopped
+  # ── 6× LatentSync 常驻 worker（GPU 0-5）──
+  avatar-0: {<<: *avatar-common, container_name: krvoiceai-avatar-0, ports: ["8010:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["0"]}]}}}}
+  avatar-1: {<<: *avatar-common, container_name: krvoiceai-avatar-1, ports: ["8011:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["1"]}]}}}}
+  avatar-2: {<<: *avatar-common, container_name: krvoiceai-avatar-2, ports: ["8012:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["2"]}]}}}}
+  avatar-3: {<<: *avatar-common, container_name: krvoiceai-avatar-3, ports: ["8013:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["3"]}]}}}}
+  avatar-4: {<<: *avatar-common, container_name: krvoiceai-avatar-4, ports: ["8014:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["4"]}]}}}}
+  avatar-5: {<<: *avatar-common, container_name: krvoiceai-avatar-5, ports: ["8015:8010"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["5"]}]}}}}
 
-  # 云端数字人服务（GPU）
-  avatar:
-    profiles: ["gpu"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.gpu
-    image: krvoiceai:gpu
-    container_name: krvoiceai-avatar
-    ports:
-      - "8010:8010"
-    volumes:
-      - ./models:/app/models
-      - ./config/avatars:/app/config/avatars
-    environment:
-      - AVATARS_DIR=/app/config/avatars
-      - MODELS_DIR=/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: ["python", "-m", "krvoiceai.api.avatar_server", "--host", "0.0.0.0", "--port", "8010"]
-    networks:
-      - krvoiceai-net
-    restart: unless-stopped
+  # ── 2× CosyVoice2 tts（GPU 6-7）──
+  tts-0: {<<: *tts-common, container_name: krvoiceai-tts-0, ports: ["9880:9880"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["6"]}]}}}}
+  tts-1: {<<: *tts-common, container_name: krvoiceai-tts-1, ports: ["9881:9880"], deploy: {resources: {reservations: {devices: [{<<: *gpu-reservation, device_ids: ["7"]}]}}}}
 
 networks:
   krvoiceai-net:

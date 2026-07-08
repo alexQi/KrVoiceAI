@@ -1,0 +1,30 @@
+# CosyVoice2 TTS 服务镜像
+# 仓库+依赖 baked 进镜像；权重走宿主 volume 挂载到 /opt/CosyVoice/pretrained_models
+FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ffmpeg libsndfile1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# CosyVoice 仓库（含 third_party/Matcha-TTS 子模块）+ 依赖
+RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice
+WORKDIR /opt/CosyVoice
+RUN git submodule update --init --recursive || true
+RUN pip install --no-cache-dir -r requirements.txt || \
+    echo "[warn] CosyVoice requirements 安装有告警，构建后请在容器内核对"
+
+# EnlyAI 主包
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY krvoiceai ./krvoiceai
+RUN pip install --no-cache-dir -e . && pip install --no-cache-dir fastapi uvicorn
+
+ENV COSYVOICE_DIR=/opt/CosyVoice \
+    COSYVOICE_MODEL_DIR=/opt/CosyVoice/pretrained_models/CosyVoice2-0.5B \
+    COSYVOICE_FP16=true \
+    TTS_BACKEND=cosyvoice \
+    VOICES_DIR=/app/config/voices
+
+EXPOSE 9880
+CMD ["python", "-m", "krvoiceai.api.tts_server", "--host", "0.0.0.0", "--port", "9880", "--backend", "cosyvoice"]
