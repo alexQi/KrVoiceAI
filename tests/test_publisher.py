@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from krvoiceai.core.audio_utils import generate_silent_wav
-from krvoiceai.core.base_module import JobContext, ModuleStatus
+from krvoiceai.core.base_module import JobContext
 from krvoiceai.core.ffmpeg_utils import FFmpegRunner
 from krvoiceai.modules.publisher import Publisher
 

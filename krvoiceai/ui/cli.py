@@ -77,7 +77,7 @@ def main():
         return 1
 
     app = EnlyAI()
-    logger = get_logger()
+    get_logger()
 
     if args.command == "run":
         script = args.script

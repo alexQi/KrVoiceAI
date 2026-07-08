@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..core.config import get_config
 from ..core.gpu_runner import GPURunner
 from ..core.ffmpeg_utils import FFmpegRunner
 from ..core.llm_client import LLMClient

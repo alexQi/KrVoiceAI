@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import time
 from pathlib import Path
-from typing import Any
 
 import httpx
 
@@ -109,7 +107,7 @@ class TTSEngine(BaseModule):
             pitch = None
 
         try:
-            start = time.time()
+            time.time()
             if self.provider == "moss_nano":
                 audio_path, duration, timestamps = self._synth_moss_nano(
                     text, voice_id, output_path, speed, volume, pitch, emotion
@@ -578,7 +576,7 @@ class TTSEngine(BaseModule):
         """
         try:
             import edge_tts
-        except ImportError as e:
+        except ImportError:
             self.logger.warning("edge-tts 未安装，降级到 mock")
             return self._synth_mock(text, voice_id, output_path)
 

@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.llm_client import LLMClient, get_llm_client

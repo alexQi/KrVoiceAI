@@ -1,12 +1,11 @@
 """pytest 全局夹具"""
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
 
-from krvoiceai.core.config import Config, get_config
+from krvoiceai.core.config import Config
 
 
 @pytest.fixture(scope="session")

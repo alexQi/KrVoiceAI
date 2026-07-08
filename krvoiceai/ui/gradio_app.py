@@ -10,10 +10,7 @@
 """
 from __future__ import annotations
 
-import json
-import shutil
 import time
-import tempfile
 import webbrowser
 from pathlib import Path
 from typing import Optional
@@ -272,7 +269,7 @@ def _build_ui() -> "gr.Blocks":
             def _optimize(text, mode, style, progress=gr.Progress(track_tqdm=False)):
                 """AI 优化文案"""
                 if not text or not text.strip():
-                    return None, "⚠️ 请先在第①步输入文案", f"字数：0"
+                    return None, "⚠️ 请先在第①步输入文案", "字数：0"
                 progress(0.2, desc="AI 正在优化文案...")
                 try:
                     app = _get_app()
@@ -410,7 +407,7 @@ def _build_ui() -> "gr.Blocks":
                     app = _get_app()
                     ok = app.register_avatar(aid, Path(video))
                     av, vv, da, dv = _refresh_avatar_voice_options()
-                    msg = f"✅ 形象 {aid} 注册成功！" if ok else f"❌ 注册失败"
+                    msg = f"✅ 形象 {aid} 注册成功！" if ok else "❌ 注册失败"
                     return msg, av, da, gr.update(visible=False)
                 except Exception as e:
                     return f"❌ 注册失败：{e}", gr.update(), None, gr.update(visible=False)
@@ -422,7 +419,7 @@ def _build_ui() -> "gr.Blocks":
                     app = _get_app()
                     ok = app.register_voice(vid, Path(sample))
                     av, vv, da, dv = _refresh_avatar_voice_options()
-                    msg = f"✅ 音色 {vid} 注册成功！" if ok else f"❌ 注册失败"
+                    msg = f"✅ 音色 {vid} 注册成功！" if ok else "❌ 注册失败"
                     return msg, vv, dv
                 except Exception as e:
                     return f"❌ 注册失败：{e}", gr.update(), None

@@ -19,9 +19,8 @@ from __future__ import annotations
 import random
 import subprocess
 from pathlib import Path
-from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.ffmpeg_utils import FFmpegRunner

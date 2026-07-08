@@ -237,8 +237,8 @@ class ScriptExtractor(BaseModule):
                                 except Exception as e2:
                                     self.logger.warning(f"文章提取也失败: {e2}")
                                     raise RuntimeError(
-                                        f"无法提取文案（网页抓取与视频下载均失败）。"
-                                        f"请直接在第①步手动输入文案，或粘贴抖音分享文本。"
+                                        "无法提取文案（网页抓取与视频下载均失败）。"
+                                        "请直接在第①步手动输入文案，或粘贴抖音分享文本。"
                                     )
             else:
                 # yt-dlp 或 ASR 不可用：优先用 Playwright 提取的 web_desc，再降级到分享文本/mock
@@ -760,7 +760,7 @@ class ScriptExtractor(BaseModule):
                         self.logger.info(f"Playwright 提取: desc={len(desc)}字, video_url={'有' if video_dl_url else '无'}")
                         return desc, video_dl_url
                     elif video_dl_url:
-                        self.logger.info(f"Playwright 仅提取到视频 URL（无文案），将做 ASR 转写")
+                        self.logger.info("Playwright 仅提取到视频 URL（无文案），将做 ASR 转写")
                         return "", video_dl_url
                     self.logger.warning(f"Playwright 渲染完成但未提取到内容: title={len(title)}字, meta={len(meta_desc)}字, caps={len(captured_video_urls)}")
                 finally:
@@ -778,7 +778,6 @@ class ScriptExtractor(BaseModule):
 
         用 httpx 下载视频（无需 yt-dlp），FFmpeg 提取音频，ASR 转写。
         """
-        import tempfile
         video_path = work_dir / "ref_video.mp4"
         audio_path = work_dir / "audio.wav"
 
@@ -799,7 +798,6 @@ class ScriptExtractor(BaseModule):
         # FFmpeg 提取音频 + 音量归一化
         raw_audio = work_dir / "raw.wav"
         self.ffmpeg.convert_audio(video_path, raw_audio, sample_rate=16000, channels=1)
-        import subprocess
         norm_cmd = [
             self.ffmpeg.ffmpeg, "-y", "-i", str(raw_audio),
             "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=16000",

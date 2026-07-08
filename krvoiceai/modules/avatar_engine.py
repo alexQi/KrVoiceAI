@@ -13,10 +13,8 @@ from __future__ import annotations
 import base64
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
-from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -742,9 +740,8 @@ class AvatarEngine(BaseModule):
             try:
                 bbox = draw.textbbox((0, 0), text, font=font)
                 tw = bbox[2] - bbox[0]
-                th = bbox[3] - bbox[1]
             except Exception:
-                tw, th = 400, 80
+                tw = 400
             draw.text(
                 ((w - tw) // 2, cy + y_offset),
                 text, fill=(255, 255, 255), font=font,

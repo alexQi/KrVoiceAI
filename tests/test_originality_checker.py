@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from krvoiceai.core.base_module import JobContext, ModuleStatus
+from krvoiceai.core.base_module import JobContext
 from krvoiceai.core.text_similarity import (
     hamming_distance,
     is_likely_duplicate,

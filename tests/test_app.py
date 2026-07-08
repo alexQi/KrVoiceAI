@@ -1,7 +1,6 @@
 """应用入口与全流程测试"""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -106,7 +105,7 @@ def test_full_pipeline_with_auto_publish(app):
 def test_job_management(app):
     """任务管理：列表/查询/重跑"""
     r1 = app.submit_and_run(script="任务一测试。")
-    r2 = app.submit_and_run(script="任务二测试。")
+    app.submit_and_run(script="任务二测试。")  # 第二个任务用于验证列表 >= 2
 
     jobs = app.list_jobs()
     assert len(jobs) >= 2
@@ -158,10 +157,7 @@ def test_health_check(app):
 
 def test_gradio_ui_buildable(app):
     """Gradio UI 可构建（不启动）"""
-    try:
-        import gradio as gr
-    except ImportError:
-        pytest.skip("gradio 未安装")
+    pytest.importorskip("gradio")
 
     from krvoiceai.ui.gradio_app import _build_ui
     # 替换全局 app

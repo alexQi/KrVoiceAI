@@ -1,5 +1,6 @@
 """快速验证 submit_and_run 响应格式修复"""
-import httpx, time, json
+import httpx
+import time
 
 client = httpx.Client(base_url="http://127.0.0.1:8000", timeout=180.0)
 
@@ -17,7 +18,7 @@ elapsed = time.time() - t0
 print(f"POST /api/generate -> {r.status_code} ({elapsed:.1f}s)")
 
 result = r.json()
-print(f"\n=== 响应字段验证 ===")
+print("\n=== 响应字段验证 ===")
 print(f"  success: {result.get('success')}")
 print(f"  job_id: {result.get('job_id')}")
 print(f"  elapsed: {result.get('elapsed')}s")
@@ -27,7 +28,7 @@ print(f"  title: {result.get('title')}")
 print(f"  cover_path: {result.get('cover_path')}")
 print(f"  audio_duration: {result.get('audio_duration')}s")
 print(f"  stages count: {len(result.get('stages', []))}")
-print(f"\n=== 阶段详情 ===")
+print("\n=== 阶段详情 ===")
 for s in result.get("stages", []):
     print(f"  {s.get('step')}: {s.get('status')} ({s.get('elapsed', 0):.2f}s)")
 

@@ -69,7 +69,7 @@ def get_wav_duration(path: Path) -> float:
 def estimate_speech_duration(text: str, chars_per_second: float = 4.5) -> float:
     """根据文本长度估算语音时长（中文约 4-5 字/秒）"""
     # 去除空白与标点后的有效字数
-    effective = sum(1 for c in text if c.strip() and not c in "，。！？、；：""''（）()【】[] \n\t")
+    effective = sum(1 for c in text if c.strip() and c not in "，。！？、；：""''（）()【】[] \n\t")
     if effective == 0:
         effective = len(text)
     return max(1.0, effective / chars_per_second)

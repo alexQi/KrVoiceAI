@@ -11,13 +11,10 @@
 from __future__ import annotations
 
 import base64
-import time
-from pathlib import Path
-from typing import Any
 
 import httpx
 
-from ..core.audio_utils import estimate_speech_duration, split_text_to_segments
+from ..core.audio_utils import split_text_to_segments
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 
 

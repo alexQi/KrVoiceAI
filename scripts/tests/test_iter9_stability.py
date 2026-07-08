@@ -6,7 +6,6 @@
 4. 连接测试 API（LLM/TTS/Avatar）
 """
 import httpx
-import sys
 import time
 
 BASE = "http://127.0.0.1:8000"
@@ -58,7 +57,7 @@ video_paths = [r.get("video_path") for r in results if r.get("video_path")]
 unique_paths = set(video_paths)
 print(f"  视频路径数: {len(video_paths)}, 唯一路径数: {len(unique_paths)}")
 assert len(unique_paths) == 3, "视频路径应全部不同（无状态泄漏）"
-print(f"  ✅ 3 次运行生成 3 个不同视频，无状态泄漏")
+print("  ✅ 3 次运行生成 3 个不同视频，无状态泄漏")
 
 # ============ 2. 错误恢复：空文案 ============
 print("\n--- [2] 错误恢复：空文案 ---")
@@ -73,9 +72,9 @@ if r.status_code == 200:
     print(f"    success={result.get('success')}, error={result.get('error','无')}")
     # 空文案应该能处理（LLM 会生成文案或返回错误）
     if not result.get("success"):
-        print(f"    ✅ 空文案正确处理失败（预期行为）")
+        print("    ✅ 空文案正确处理失败（预期行为）")
     else:
-        print(f"    ✅ 空文案被 LLM 自动补全（预期行为）")
+        print("    ✅ 空文案被 LLM 自动补全（预期行为）")
 else:
     print(f"    ❌ 不应返回 HTTP 错误: {r.text[:200]}")
 
@@ -92,7 +91,7 @@ if r.status_code == 200:
     print(f"    success={result.get('success')}")
     # 无效 avatar 应该回退到 mock 或 default
     if result.get("success"):
-        print(f"    ✅ 无效 avatar_id 自动回退到默认/mock（优雅降级）")
+        print("    ✅ 无效 avatar_id 自动回退到默认/mock（优雅降级）")
     else:
         print(f"    ⚠️ 无效 avatar_id 导致失败: {result.get('error','?')[:100]}")
 
@@ -110,7 +109,7 @@ if r.status_code == 200:
     result = r.json()
     print(f"    success={result.get('success')}, audio_duration={result.get('audio_duration')}s")
     if result.get("success"):
-        print(f"    ✅ 超长文案正确处理（分段合成）")
+        print("    ✅ 超长文案正确处理（分段合成）")
     else:
         print(f"    ⚠️ 超长文案处理失败: {result.get('error','?')[:100]}")
 
@@ -130,7 +129,7 @@ if r.status_code == 200:
     if result.get("result"):
         script_text = result["result"].get("script_text", "")
         print(f"    生成文案: {script_text[:100]}...")
-    print(f"    ✅ 单模块执行正常")
+    print("    ✅ 单模块执行正常")
 else:
     print(f"    ❌ 单模块执行失败: {r.text[:200]}")
 
@@ -165,11 +164,11 @@ for i in range(3):
     print(f"  [{i+1}] status={health.get('status')}, ffmpeg={health.get('ffmpeg')}, avatars={health.get('avatars_count')}")
     assert r.status_code == 200
     assert health.get("status") == "ok"
-print(f"  ✅ 健康检查稳定")
+print("  ✅ 健康检查稳定")
 
 print("\n✅ 迭代9：稳定性测试通过")
-print(f"  - 连续 3 次运行全部成功，无状态泄漏")
-print(f"  - 空文案/无效avatar/超长文案 错误恢复正常")
-print(f"  - 单模块执行正常")
-print(f"  - 连接测试 API 正常")
-print(f"  - 健康检查稳定")
+print("  - 连续 3 次运行全部成功，无状态泄漏")
+print("  - 空文案/无效avatar/超长文案 错误恢复正常")
+print("  - 单模块执行正常")
+print("  - 连接测试 API 正常")
+print("  - 健康检查稳定")

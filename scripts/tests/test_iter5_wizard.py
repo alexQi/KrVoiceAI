@@ -3,7 +3,6 @@
 模拟真实用户从模板选择 → 数字人 → 文案 → 语音 → 字幕效果 → 生成的完整点击流程
 """
 import httpx
-import json
 import time
 import sys
 
@@ -161,12 +160,12 @@ print(f"POST /api/generate -> {r.status_code} (耗时 {elapsed:.1f}s)")
 
 if r.status_code == 200:
     result = r.json()
-    print(f"\n生成结果:")
+    print("\n生成结果:")
     print(f"  success: {result.get('success')}")
     print(f"  job_id: {result.get('job_id')}")
     print(f"  耗时: {result.get('elapsed', elapsed):.1f}s")
     stages = result.get("stages", {})
-    print(f"  阶段执行情况:")
+    print("  阶段执行情况:")
     for stage_name, stage_data in stages.items():
         status = stage_data.get("status") if isinstance(stage_data, dict) else stage_data
         dur = stage_data.get("elapsed", 0) if isinstance(stage_data, dict) else 0

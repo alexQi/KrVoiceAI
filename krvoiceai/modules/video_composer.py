@@ -16,8 +16,6 @@
 """
 from __future__ import annotations
 
-import shlex
-import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -27,9 +25,7 @@ from PIL import Image
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.ffmpeg_utils import FFmpegRunner
 from .subtitle_styler import (
-    SUBTITLE_STYLE_PRESETS,
     srt_to_ass,
-    write_ass_file,
 )
 
 
@@ -138,7 +134,7 @@ class VideoComposer(BaseModule):
         output_path = ctx.work_dir / "final_video.mp4"
 
         try:
-            start = time.time()
+            time.time()
 
             # 自动选择 BGM（若未指定且配置启用）
             bgm = ctx.bgm_path
@@ -308,7 +304,7 @@ class VideoComposer(BaseModule):
             audio_filter = (
                 _voice_chain("voice") + ";"
                 + bgm_chain + ";"
-                f"[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+                "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[aout]"
             )
         elif voice_audio and Path(voice_audio).exists():
             # 只有人声，无 BGM（含封面延迟补偿）
@@ -600,7 +596,7 @@ class VideoComposer(BaseModule):
         alpha = max(0.1, min(1.0, self.watermark_opacity / 100.0))
         # 位置映射
         positions = {
-            "top_left": f"x=20:y=20",
+            "top_left": "x=20:y=20",
             "top_right": f"x={w}-tw-20:y=20",
             "bottom_left": f"x=20:y={h}-th-20",
             "bottom_right": f"x={w}-tw-20:y={h}-th-20",
@@ -694,7 +690,7 @@ class VideoComposer(BaseModule):
             "-i", str(cover_clip),
             "-i", str(normalized_video),
             "-filter_complex",
-            f"[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
+            "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
             "-map", "[outv]", "-map", "[outa]",
             "-c:v", self._vcodec,
             "-preset", self._vpreset,
@@ -805,11 +801,9 @@ class VideoComposer(BaseModule):
         # 根据前缀选择渐变色（片头用深蓝→紫，片尾用深紫→红）
         if prefix == "intro":
             # 片头：深蓝到紫色渐变
-            grad = "0x0A0A2E-0x2D1B4E"
             font_color = "white"
         else:
             # 片尾：深紫到暗红渐变
-            grad = "0x2D1B4E-0x4A1A2E"
             font_color = "0xFFD700"  # 金色
 
         font_size = max(48, h // 18)

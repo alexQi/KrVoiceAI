@@ -4,7 +4,6 @@
 """
 import httpx
 import sys
-import time
 
 BASE = "http://127.0.0.1:8000"
 client = httpx.Client(base_url=BASE, timeout=60.0)
@@ -155,6 +154,6 @@ print(f"  默认效果配置: filter={default_effects.get('filter')}, transition
 assert reset_subtitle.get("preset") == default_subtitle.get("preset"), "字幕预设未还原到默认"
 assert reset_audio.get("emotion") == default_audio.get("emotion"), "音频情感未还原到默认"
 print("\n✅ 迭代6：模板系统应用与还原测试通过")
-print(f"  - 6 个模板全部应用成功")
-print(f"  - 字幕预设/情感/BGM 配置全部正确传播")
-print(f"  - 重置后配置正确回到默认值")
+print("  - 6 个模板全部应用成功")
+print("  - 字幕预设/情感/BGM 配置全部正确传播")
+print("  - 重置后配置正确回到默认值")

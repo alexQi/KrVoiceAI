@@ -4,7 +4,6 @@
 """
 import httpx
 import sys
-import time
 import yaml
 
 BASE = "http://127.0.0.1:8000"
@@ -132,7 +131,7 @@ put_cfg("llm", {"temperature": 0.9})
 cfg = get_cfg("llm")
 print(f"  修改 temperature=0.9, 立即读取: {cfg.get('temperature')}")
 assert cfg.get("temperature") == 0.9, "热更新未生效"
-print(f"  ✅ 热更新生效")
+print("  ✅ 热更新生效")
 
 # ============ 5. 验证敏感字段掩码 ============
 print("\n--- [5] 验证敏感字段掩码（API Key 不应明文返回）---")
@@ -142,11 +141,11 @@ print(f"  LLM api_key (掩码后): {api_key}")
 # 验证掩码：不应包含完整的 key（以 sk- 开头且长度>20 的明文）
 import re
 if re.match(r"^sk-[A-Za-z0-9]{20,}$", str(api_key)):
-    print(f"  ❌ API Key 未掩码！")
+    print("  ❌ API Key 未掩码！")
     sys.exit(1)
 # 掩码格式应为 "sk-T****NCs" 或 "****"
 if "*" in str(api_key):
-    print(f"  ✅ API Key 已正确掩码")
+    print("  ✅ API Key 已正确掩码")
 else:
     print(f"  ⚠️ API Key 掩码格式异常: {api_key}")
 
@@ -190,7 +189,7 @@ for section in ALL_SECTIONS:
 
 print("\n✅ 迭代8：设置中心所有配置段保存/热更新测试通过")
 print(f"  - {len(ALL_SECTIONS)} 个配置段全部保存成功")
-print(f"  - 持久化到 user_config.yaml 验证通过")
-print(f"  - 热更新立即生效验证通过")
-print(f"  - 敏感字段掩码验证通过")
-print(f"  - 重置恢复默认验证通过")
+print("  - 持久化到 user_config.yaml 验证通过")
+print("  - 热更新立即生效验证通过")
+print("  - 敏感字段掩码验证通过")
+print("  - 重置恢复默认验证通过")

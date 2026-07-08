@@ -8,9 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from krvoiceai.core.base_module import JobContext
 from krvoiceai.core.ffmpeg_utils import FFmpegRunner
-from krvoiceai.core.gpu_runner import GPURunner
 from krvoiceai.core.llm_client import LLMClient
 from krvoiceai.modules.avatar_engine import AvatarEngine
 from krvoiceai.modules.script_writer import ScriptWriter
@@ -133,7 +131,8 @@ def test_end_to_end_video_has_audio(orchestrator):
     final_video = Path(job["output"]["final_video"])
 
     # 用 ffprobe 检查音频流
-    import subprocess, json
+    import subprocess
+    import json
     r = subprocess.run(
         [
             "ffprobe", "-v", "error",
@@ -234,8 +233,6 @@ def test_validate_artifact_nonexistent(orchestrator):
 
 def test_load_context_skips_corrupted(orchestrator, isolated_config, tmp_path):
     """断点续跑时跳过损坏产物 → 从该步骤重跑"""
-    from krvoiceai.core.base_module import JobContext
-    from krvoiceai.core.audio_utils import generate_silent_wav
 
     # 模拟一个任务：先正常跑通到 tts，产出音频
     job_id = orchestrator.submit_job(script="测试损坏产物续跑")

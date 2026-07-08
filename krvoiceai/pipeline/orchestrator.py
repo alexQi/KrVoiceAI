@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
-from ..core.base_module import BaseModule, JobContext, ModuleResult
+from ..core.base_module import BaseModule, JobContext
 from ..core.config import get_config
 from ..core.logger import get_logger
 from ..core.storage import Storage

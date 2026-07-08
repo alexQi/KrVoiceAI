@@ -331,7 +331,6 @@ def create_app() -> FastAPI:
         """上传 B-roll 素材（视频/图片），返回可引用的路径"""
         broll_dir = Path("./config/broll_assets")
         broll_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(file.filename or "asset").suffix or ".mp4"
         # 生成唯一文件名
         import time as _t
         filename = f"broll_{int(_t.time())}_{file.filename}"
@@ -388,7 +387,6 @@ def create_app() -> FastAPI:
             video_path: 输入视频路径
             clips_json: B-roll 片段列表 JSON 字符串
         """
-        import json
         from ..modules.broll_engine import BRollEngine
         loop = asyncio.get_event_loop()
 
@@ -520,7 +518,6 @@ def create_app() -> FastAPI:
                 - volume: {volume}
                 - fade: {fade_in, fade_out}
         """
-        import json
         from ..core.ffmpeg_utils import FFmpegRunner
         loop = asyncio.get_event_loop()
 
@@ -899,7 +896,6 @@ def create_app() -> FastAPI:
         使用户可直接在向导中选择该形象。
         """
         from pathlib import Path as _Path
-        import shutil
         src = _Path(f"./config/presets/avatars/{avatar_id}.jpg")
         if not src.exists():
             return {"success": False, "error": "预制形象图不存在"}
@@ -960,7 +956,7 @@ def create_app() -> FastAPI:
         # 限制试听长度（避免长时间等待）
         if len(text) > 200:
             text = text[:200]
-            logger.info(f"文案试听：截断到 200 字")
+            logger.info("文案试听：截断到 200 字")
         # 可选音频参数（语速/音量/音高/情感）
         speed = req.get("speed")
         volume = req.get("volume")

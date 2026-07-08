@@ -1,9 +1,8 @@
 """P0 脚手架烟雾测试"""
 from __future__ import annotations
 
-from pathlib import Path
 
-from krvoiceai.core.config import Config, get_config
+from krvoiceai.core.config import Config
 from krvoiceai.core.logger import setup_logging, get_logger
 from krvoiceai.core.base_module import BaseModule, JobContext, ModuleResult, ModuleStatus
 from krvoiceai.core.storage import Storage

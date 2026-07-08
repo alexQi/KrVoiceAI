@@ -81,7 +81,7 @@ else:
     print(f"  响应: {jobs}")
 
 # ============ 3. 单任务详情查询 ============
-print(f"\n--- [3] 单任务详情查询 ---")
+print("\n--- [3] 单任务详情查询 ---")
 target_job = job_ids[0] if job_ids else None
 if target_job:
     r = client.get(f"/api/jobs/{target_job}")
@@ -100,7 +100,7 @@ if target_job:
         print(f"  ❌ 查询失败: {r.text[:200]}")
 
 # ============ 4. 任务重跑（断点续跑） ============
-print(f"\n--- [4] 任务重跑测试 ---")
+print("\n--- [4] 任务重跑测试 ---")
 if target_job:
     r = client.post(f"/api/jobs/{target_job}/rerun")
     print(f"POST /api/jobs/{target_job}/rerun -> {r.status_code}")
@@ -110,7 +110,7 @@ if target_job:
         print(f"  重跑失败: {r.text[:200]}")
 
 # ============ 5. 任务删除 ============
-print(f"\n--- [5] 任务删除测试 ---")
+print("\n--- [5] 任务删除测试 ---")
 if len(job_ids) >= 2:
     del_job = job_ids[-1]  # 删除最后一个
     r = client.delete(f"/api/jobs/{del_job}")
@@ -121,10 +121,10 @@ if len(job_ids) >= 2:
     r = client.get(f"/api/jobs/{del_job}")
     print(f"  验证删除: GET /api/jobs/{del_job} -> {r.status_code}")
     if r.status_code == 404:
-        print(f"  ✅ 任务已成功删除")
+        print("  ✅ 任务已成功删除")
     else:
         print(f"  ⚠️ 任务可能未删除: {r.text[:200]}")
 
 print("\n✅ 迭代7：批量处理与任务管理测试通过")
 print(f"  - 批量生成 {len(results)} 个任务全部成功")
-print(f"  - 任务列表/详情/重跑/删除 API 全部正常")
+print("  - 任务列表/详情/重跑/删除 API 全部正常")

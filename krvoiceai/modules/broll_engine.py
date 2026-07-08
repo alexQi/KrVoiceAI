@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.ffmpeg_utils import FFmpegRunner
@@ -341,7 +340,7 @@ class BRollEngine(BaseModule):
 
         # 校验并修正每个推荐
         valid_path_set = {a.get("path", "") for a in assets}
-        valid_filename_set = {a.get("filename", "") for a in assets}
+        {a.get("filename", "") for a in assets}
         path_by_filename = {a.get("filename", ""): a.get("path", "") for a in assets}
 
         result = []

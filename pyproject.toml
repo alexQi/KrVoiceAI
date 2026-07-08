@@ -80,3 +80,14 @@ addopts = "-v --tb=short"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# 一次性运维脚本 / 第三方子仓不纳入 lint 门禁
+extend-exclude = ["scripts", "Wav2Lip", "MOSS-TTS-Nano", "wav2lip_env"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+# 行宽对含大量中文注释/长字符串的本项目是噪音，不作门禁（line-length 仅供 format 参考）
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里 import 副作用/可用性探测等模式允许
+"tests/**" = ["E402"]

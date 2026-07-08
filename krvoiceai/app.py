@@ -5,11 +5,10 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .core.base_module import BaseModule, JobContext, ModuleResult
+from .core.base_module import BaseModule, JobContext
 from .core.config import get_config
 from .core.ffmpeg_utils import FFmpegRunner
 from .core.gpu_runner import GPURunner
@@ -29,7 +28,7 @@ from .modules.title_generator import TitleGenerator
 from .modules.tts_engine import TTSEngine
 from .modules.video_composer import VideoComposer
 from .pipeline.orchestrator import PipelineOrchestrator, StepDef
-from .pipeline.state import JobStatus, JobStore, PIPELINE_STEPS, StepStatus
+from .pipeline.state import JobStore, PIPELINE_STEPS
 
 
 # 文案爆款模板库（对标万兴播爆/即梦AI灵感社区）

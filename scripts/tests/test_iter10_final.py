@@ -63,7 +63,7 @@ print(f"  elapsed_ms: {result.get('elapsed_ms')}")
 print(f"  model: {result.get('model')}")
 assert result.get("success"), f"MiMo TTS 测试失败: {result.get('message')}"
 assert "字节音频" in result.get("message", ""), "TTS 测试消息应包含合成的音频字节数"
-print(f"  ✅ MiMo TTS 测试修复验证通过（真实合成音频）")
+print("  ✅ MiMo TTS 测试修复验证通过（真实合成音频）")
 
 # ============ 3. LLM 测试验证 ============
 print("\n--- [3] LLM 测试验证 ---")
@@ -101,7 +101,7 @@ print(f"POST /api/generate -> {r.status_code} ({elapsed:.1f}s)")
 result = r.json()
 assert result.get("success"), f"流水线失败: {result.get('error')}"
 
-print(f"\n  === 流水线结果 ===")
+print("\n  === 流水线结果 ===")
 print(f"  job_id: {result.get('job_id')}")
 print(f"  elapsed: {result.get('elapsed')}s")
 print(f"  video_path: {result.get('video_path')}")
@@ -139,7 +139,7 @@ if subtitle_path:
         print(f"  ✅ 字幕文件存在: {len(content)} 字符")
         # 验证 SRT 格式
         if content.strip().startswith("1"):
-            print(f"     字幕格式: SRT")
+            print("     字幕格式: SRT")
     else:
         print(f"  ❌ 字幕文件不存在: {full_path}")
 

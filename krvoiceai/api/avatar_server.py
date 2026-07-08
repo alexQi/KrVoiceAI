@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="EnlyAI Avatar Server", version="2.0")

@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-from typing import Any
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.llm_client import LLMClient, get_llm_client
@@ -192,7 +191,7 @@ class ScriptWriter(BaseModule):
             report = json.loads(raw)
         except json.JSONDecodeError:
             # JSON 解析失败时返回降级报告
-            self.logger.warning(f"爆款分析 JSON 解析失败，返回降级报告")
+            self.logger.warning("爆款分析 JSON 解析失败，返回降级报告")
             report = {
                 "hook_type": "未知",
                 "hook_analysis": "分析结果解析失败，请重试",

@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -206,7 +205,6 @@ def test_subtitle():
 # ============ 环节 8: B-roll ============
 def test_broll():
     hr("环节 8: B-roll 画中画叠加")
-    from krvoiceai.core.config import get_config
     from krvoiceai.modules.broll_engine import BRollEngine
     from krvoiceai.core.base_module import JobContext
     from krvoiceai.core.audio_utils import generate_silent_wav

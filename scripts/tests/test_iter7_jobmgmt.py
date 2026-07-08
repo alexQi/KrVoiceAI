@@ -1,5 +1,6 @@
 """迭代7补充：任务管理测试（列表/详情/重跑/删除）"""
-import httpx, sys, time
+import httpx
+import sys
 
 client = httpx.Client(base_url="http://127.0.0.1:8000", timeout=300.0)
 
@@ -40,11 +41,11 @@ print(f"  输出: video={output.get('final_video','?')}")
 print(f"  输出: title={output.get('title','?')}")
 
 # ============ 3. 查询不存在的任务 ============
-print(f"\n--- [3] 查询不存在的任务 ---")
+print("\n--- [3] 查询不存在的任务 ---")
 r = client.get("/api/jobs/nonexistent_job_12345")
 print(f"GET /api/jobs/nonexistent_job_12345 -> {r.status_code}")
 assert r.status_code == 404, f"应返回404, 实际: {r.status_code}"
-print(f"  ✅ 正确返回 404")
+print("  ✅ 正确返回 404")
 
 # ============ 4. 任务重跑（断点续跑） ============
 print(f"\n--- [4] 任务重跑测试: {target_job} ---")
@@ -63,7 +64,7 @@ else:
     print(f"  重跑失败: {r.text[:300]}")
 
 # ============ 5. 任务删除 ============
-print(f"\n--- [5] 任务删除测试 ---")
+print("\n--- [5] 任务删除测试 ---")
 # 使用列表中最后一个任务来删除
 if len(jobs) >= 2:
     del_job = jobs[-1].get("job_id")
@@ -77,19 +78,19 @@ if len(jobs) >= 2:
     r = client.get(f"/api/jobs/{del_job}")
     print(f"  验证删除: GET -> {r.status_code}")
     assert r.status_code == 404, f"任务应已删除(404), 实际: {r.status_code}"
-    print(f"  ✅ 任务已成功删除")
+    print("  ✅ 任务已成功删除")
 
 # ============ 6. 验证删除后列表更新 ============
-print(f"\n--- [6] 验证删除后列表更新 ---")
+print("\n--- [6] 验证删除后列表更新 ---")
 r = client.get("/api/jobs?limit=10")
 jobs_after = r.json()
 print(f"  删除前任务数: {len(jobs)}")
 print(f"  删除后任务数: {len(jobs_after)}")
 
 print("\n✅ 迭代7：批量处理与任务管理测试全部通过")
-print(f"  - 批量生成 2/2 成功")
-print(f"  - 任务列表查询正常")
-print(f"  - 任务详情查询正常（含9个步骤）")
-print(f"  - 不存在任务正确返回404")
-print(f"  - 任务重跑正常")
-print(f"  - 任务删除正常")
+print("  - 批量生成 2/2 成功")
+print("  - 任务列表查询正常")
+print("  - 任务详情查询正常（含9个步骤）")
+print("  - 不存在任务正确返回404")
+print("  - 任务重跑正常")
+print("  - 任务删除正常")

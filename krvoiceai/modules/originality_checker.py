@@ -25,7 +25,6 @@ from ..core.base_module import BaseModule, JobContext, ModuleResult
 from ..core.llm_client import LLMClient, get_llm_client
 from ..core.text_similarity import (
     hamming_distance,
-    is_likely_duplicate,
     normalize_text,
     simhash,
     simhash_similarity,
@@ -113,7 +112,7 @@ class OriginalityChecker(BaseModule):
 
         try:
             start = time.time()
-            normalized = normalize_text(text)
+            normalize_text(text)
             report: dict[str, Any] = {
                 "char_count": len(text),
             }
@@ -162,7 +161,7 @@ class OriginalityChecker(BaseModule):
                                 )
                                 text = fixed
                                 ctx.script_text = text
-                                normalized = normalize_text(text)
+                                normalize_text(text)
                                 try:
                                     fingerprint = simhash(text)
                                     report["simhash"] = fingerprint

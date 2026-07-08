@@ -7,11 +7,10 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
-from krvoiceai.pipeline.parallel_runner import BatchResult, ParallelRunner
+from krvoiceai.pipeline.parallel_runner import ParallelRunner
 
 
 def _make_app_mock(concurrency_cfg=1, gpu_enabled=False):

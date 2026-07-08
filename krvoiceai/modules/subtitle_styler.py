@@ -253,7 +253,7 @@ def segments_to_ass(
     ass_align = POSITION_ALIGNMENT.get(pos_key, 2)
 
     # 行高（ASS 用像素，1.2 倍约等于 +20% 字号）
-    ass_line_spacing = int(font_size * (line_spacing - 1.0))
+    int(font_size * (line_spacing - 1.0))
 
     # 构建 ASS 头部
     header = f"""[Script Info]
@@ -316,7 +316,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start = _ass_time(seg["start"])
         end = _ass_time(seg["end"])
         # 先把原始换行转成 \\N，再自动折行
-        raw_text = seg["text"].strip().replace("\n", "\\N")
+        seg["text"].strip().replace("\n", "\\N")
         if karaoke:
             # 逐字高亮：优先用词级时间戳，否则按字数均分
             # 注意：karaoke 模式下逐字 \\kf 标签已含完整文本，不折行

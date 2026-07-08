@@ -1,7 +1,6 @@
 """标题生成 + 封面生成模块测试"""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest

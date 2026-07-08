@@ -21,7 +21,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from ..core.base_module import BaseModule, JobContext, ModuleResult
 
@@ -110,7 +110,7 @@ class Publisher(BaseModule):
             )
 
         # auto 模式：实际发布
-        results = self._publish_all(targets)
+        self._publish_all(targets)
         self._write_manifest(targets, manifest_path)  # 更新状态
 
         success_count = sum(1 for t in targets if t.status == "success")
@@ -370,7 +370,7 @@ class Publisher(BaseModule):
                 # 1. 上传视频文件
                 upload_input = page.locator(cfg["upload_input"]).first
                 upload_input.set_input_files(str(target.video_path))
-                self.logger.info(f"已选择视频文件，等待上传...")
+                self.logger.info("已选择视频文件，等待上传...")
                 # 等待上传完成（最长5分钟，看进度条消失或出现发布按钮可用）
                 for _ in range(150):
                     time.sleep(2)
@@ -389,7 +389,7 @@ class Publisher(BaseModule):
                     desc_sel = page.locator(cfg["desc_input"]).first
                     if desc_sel.count() > 0:
                         desc_sel.fill(target.description)
-                        self.logger.info(f"已填写描述")
+                        self.logger.info("已填写描述")
 
                 # 4. 等待用户确认发布（半自动模式：用户可手动调整后点发布）
                 # 这里等待5秒让用户检查，然后自动点击发布
@@ -399,11 +399,11 @@ class Publisher(BaseModule):
                 publish_btn = page.locator(cfg["publish_btn"]).first
                 if publish_btn.count() > 0:
                     publish_btn.click()
-                    self.logger.info(f"已点击发布按钮")
+                    self.logger.info("已点击发布按钮")
                     # 等待发布完成
                     time.sleep(10)
                 else:
-                    self.logger.warning(f"未找到发布按钮，请手动点击发布")
+                    self.logger.warning("未找到发布按钮，请手动点击发布")
 
                 # 提取发布后的视频URL（尝试从跳转后的页面获取）
                 final_url = page.url
@@ -500,7 +500,7 @@ class Publisher(BaseModule):
         self._write_manifest(targets, manifest_path)
 
         # 执行发布
-        results = self._publish_all(targets)
+        self._publish_all(targets)
         # 更新清单状态
         self._write_manifest(targets, manifest_path)
 
@@ -620,7 +620,6 @@ class Publisher(BaseModule):
             return {"status": "failed", "error": "请先调用 login_bilibili_qrcode 生成二维码"}
 
         import asyncio
-        from bilibili_api import login_v2
 
         try:
             # 检查扫码状态（注意：FastAPI 已在事件循环中，不能用 asyncio.run）
@@ -630,11 +629,11 @@ class Publisher(BaseModule):
                     import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor() as pool:
                         future = pool.submit(asyncio.run, self._bilibili_qr_login.check_state())
-                        state = future.result()
+                        future.result()
                 else:
-                    state = loop.run_until_complete(self._bilibili_qr_login.check_state())
+                    loop.run_until_complete(self._bilibili_qr_login.check_state())
             except RuntimeError:
-                state = asyncio.run(self._bilibili_qr_login.check_state())
+                asyncio.run(self._bilibili_qr_login.check_state())
             # state 可能是 QrCodeLoginEvents.WAITING / DONE / EXPIRED
             if self._bilibili_qr_login.has_done():
                 # 获取 Credential
