@@ -143,20 +143,28 @@ class LatentSyncEngine:
         # 把仓库根加入 import 路径
         if str(self.repo_dir) not in sys.path:
             sys.path.insert(0, str(self.repo_dir))
+        # LatentSync 用相对路径读资产（如 latentsync/utils/mask.png），必须把 CWD 切到仓库根。
+        # AVATARS_DIR/临时文件均为绝对路径，chdir 不影响它们。
+        os.chdir(str(self.repo_dir))
         from latentsync.models.unet import UNet3DConditionModel
         from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
         from latentsync.whisper.audio2feature import Audio2Feature
 
         cfg = OmegaConf.load(str(self.config))
         self._num_frames = int(cfg.data.num_frames)
+        self._resolution = int(cfg.data.resolution)
+        self._mask_path = cfg.data.get("mask_image_path", "latentsync/utils/mask.png")
         self._dtype = torch.float16
         device = "cuda"
 
         scheduler = DDIMScheduler.from_pretrained(str(self.repo_dir / "configs"))
         audio_encoder = Audio2Feature(
-            model_path=str(self.whisper_ckpt), device=device, num_frames=self._num_frames)
+            model_path=str(self.whisper_ckpt), device=device,
+            num_frames=self._num_frames,
+            audio_feat_length=cfg.data.get("audio_feat_length", [2, 2]))
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=self._dtype)
         vae.config.scaling_factor = 0.18215
+        vae.config.shift_factor = 0  # 官方 scripts/inference.py 必设；缺则 prepare_mask_latents 报 Tensor-None
         unet, _ = UNet3DConditionModel.from_pretrained(
             OmegaConf.to_container(cfg.model), str(self.ckpt), device="cpu")
         unet = unet.to(dtype=self._dtype)
@@ -180,6 +188,9 @@ class LatentSyncEngine:
             _placeholder_generate(ref_video, audio_path, out_path)
 
     def _infer_resident(self, ref_video, audio_path, out_path, steps, resolution, seed) -> None:
+        # 严格对齐官方 scripts/inference.py 的 pipeline(...) 调用（宽高用 config.data.resolution，
+        # 传 mask_image_path/temp_dir，不传 seed——LipsyncPipeline 用 generator 而非 seed）
+        temp_dir = tempfile.mkdtemp(prefix="latentsync_")
         self._pipe(
             video_path=str(ref_video),
             audio_path=str(audio_path),
@@ -188,8 +199,10 @@ class LatentSyncEngine:
             num_inference_steps=int(steps),
             guidance_scale=self.guidance,
             weight_dtype=self._dtype,
-            width=int(resolution), height=int(resolution),
-            seed=int(seed),
+            width=self._resolution,
+            height=self._resolution,
+            mask_image_path=self._mask_path,
+            temp_dir=temp_dir,
         )
         if not Path(out_path).exists():
             raise RuntimeError("LatentSync resident 推理未产出视频")
@@ -345,6 +358,8 @@ def generate(req: GenerateRequest):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         for p in (audio_path, out_path):

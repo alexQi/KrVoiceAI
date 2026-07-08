@@ -51,6 +51,7 @@ def _allowed_roots() -> list[Path]:
     except Exception:
         pass
     roots.append(Path("workspace_data").resolve())
+    roots.append(Path("output").resolve())  # 试听/预览音频落在 ./output
     # 去重（保序）
     seen: dict[str, Path] = {}
     for r in roots:

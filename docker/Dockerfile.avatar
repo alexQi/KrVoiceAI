@@ -1,25 +1,41 @@
 # LatentSync 常驻数字人 worker 镜像（M1）
 # 仓库+依赖 baked 进镜像（可复现）；权重体积大，走宿主 volume 挂载到 /opt/LatentSync/checkpoints
+# 复用基础镜像自带 torch 2.2.2（daocloud 已缓存，拉取快）；剔除 requirements 里的 torch pin
 FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     HF_ENDPOINT=https://hf-mirror.com
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ffmpeg libgl1 libglib2.0-0 libsndfile1 ca-certificates \
+RUN sed -i 's@//.*archive.ubuntu.com@//mirrors.aliyun.com@g; s@//security.ubuntu.com@//mirrors.aliyun.com@g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        git ffmpeg libgl1 libglib2.0-0 libsndfile1 ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # LatentSync 仓库 + 依赖（首次构建可能需按实际版本微调 requirements）
 RUN git clone https://github.com/bytedance/LatentSync.git /opt/LatentSync
 WORKDIR /opt/LatentSync
-RUN pip install --no-cache-dir -r requirements.txt || \
-    echo "[warn] LatentSync requirements 安装有告警，构建后请在容器内核对"
+# 约束:setuptools<81 保留 pkg_resources；opencv-contrib 钉到与 opencv-python 同版本，
+# 避免 mediapipe 拉 contrib 触发 pip 版本回溯循环。剔除 torch（用基础镜像自带 2.2.2）。不再吞错。
+RUN pip install -U pip && \
+    printf 'setuptools<81\nopencv-contrib-python==4.9.0.80\n' > /tmp/pipc.txt && \
+    grep -vE '^(torch|torchvision|torchaudio)[=<>]' requirements.txt > /tmp/req.txt && \
+    PIP_CONSTRAINT=/tmp/pipc.txt pip install --no-cache-dir -r /tmp/req.txt
 
 # EnlyAI 主包
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY krvoiceai ./krvoiceai
 RUN pip install --no-cache-dir -e . && pip install --no-cache-dir fastapi uvicorn
+
+# 删除 conda 最小 ffmpeg（无 libx264），让 PATH 落到 apt 的 /usr/bin/ffmpeg。
+# LatentSync 用 ffmpeg -crf 重编码，conda ffmpeg 不识别 crf 会失败 → 0 帧 → 崩。
+# 放在末尾独立层：改动它不会使前面昂贵的依赖层缓存失效。
+RUN rm -f /opt/conda/bin/ffmpeg /opt/conda/bin/ffprobe
+
+# 装 cudnn9：基础镜像只有 cudnn8，而 onnxruntime-gpu(insightface 人脸检测)需要 libcudnn.so.9，
+# 否则回退 CPU(慢)。放 LD_LIBRARY_PATH 让 onnxruntime dlopen 到它；torch 用自带 cudnn8 不受影响。
+RUN pip install --no-cache-dir nvidia-cudnn-cu12
+ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.10/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
 
 ENV LATENTSYNC_DIR=/opt/LatentSync \
     LATENTSYNC_CKPT=/opt/LatentSync/checkpoints/latentsync_unet.pt \

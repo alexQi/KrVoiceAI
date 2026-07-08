@@ -1,0 +1,25 @@
+# 构建上下文排除大文件/无关目录（否则 build 会把 ~15GB 权重传给 daemon）
+.git
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# 模型权重与仓库（走 volume 挂载，不进镜像/上下文）
+docker/deploy_models/
+deploy_models/
+models/
+LatentSync/
+CosyVoice/
+Wav2Lip/
+wav2lip_env/
+MOSS-TTS-Nano/
+
+# 运行时产物 / 用户素材（不需要进构建上下文）
+workspace_data/
+output/
+config/avatars/*/reference.mp4
+config/avatars/*/*.mp4
+config/voices/*/
+config/cookies/

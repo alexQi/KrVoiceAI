@@ -68,8 +68,13 @@ services:
     environment:
       - KRVOICEAI_GPU_RUNNER_AVATAR_ENDPOINT=http://avatar-0:8010
       - KRVOICEAI_GPU_RUNNER_TTS_ENDPOINT=http://tts-0:9880
+      - KRVOICEAI_AVATAR_API_BASE=http://avatar-0:8010
+      - KRVOICEAI_TTS_API_BASE=http://tts-0:9880
       - KRVOICEAI_AVATAR_PROVIDER=latentsync
       - KRVOICEAI_TTS_PROVIDER=cosyvoice
+      # M2 单条视频多卡分片：开启 + 6 个 avatar worker 池
+      - KRVOICEAI_AVATAR_SHARDING_ENABLED=true
+      - KRVOICEAI_GPU_RUNNER_AVATAR_WORKERS=http://avatar-0:8010,http://avatar-1:8010,http://avatar-2:8010,http://avatar-3:8010,http://avatar-4:8010,http://avatar-5:8010
     networks: [krvoiceai-net]
     restart: unless-stopped
     command: ["python", "-m", "krvoiceai.web.server", "--host", "0.0.0.0", "--port", "8000"]

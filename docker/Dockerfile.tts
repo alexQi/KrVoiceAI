@@ -5,16 +5,23 @@ FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     HF_ENDPOINT=https://hf-mirror.com
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ffmpeg libsndfile1 ca-certificates \
+RUN sed -i 's@//.*archive.ubuntu.com@//mirrors.aliyun.com@g; s@//security.ubuntu.com@//mirrors.aliyun.com@g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        git ffmpeg libsndfile1 ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # CosyVoice 仓库（含 third_party/Matcha-TTS 子模块）+ 依赖
 RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice
 WORKDIR /opt/CosyVoice
 RUN git submodule update --init --recursive || true
-RUN pip install --no-cache-dir -r requirements.txt || \
-    echo "[warn] CosyVoice requirements 安装有告警，构建后请在容器内核对"
+# setuptools<81 保留 pkg_resources；剔除 torch（CosyVoice pin 的 torch==2.3.1 从 pytorch.org
+# 下载 781MB 又慢又超时，改用基础镜像自带 2.2.2）。不再吞错，失败即中断构建。
+RUN pip install -U pip && echo "setuptools<81" > /tmp/pipc.txt && \
+    grep -vE '^(torch|torchvision|torchaudio)[=<>]' requirements.txt > /tmp/req.txt && \
+    PIP_CONSTRAINT=/tmp/pipc.txt pip install --no-cache-dir -r /tmp/req.txt && \
+    pip uninstall -y deepspeed
+# CosyVoice2 推理(load_jit=False)不需要 deepspeed，而 deepspeed 在 runtime 镜像(无 nvcc)
+# 会触发 transformers 导入时编译 CUDA 算子失败 → 卸掉，避免 CosyVoice 加载失败回退占位。
 
 # EnlyAI 主包
 WORKDIR /app
