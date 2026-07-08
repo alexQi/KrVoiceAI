@@ -11,6 +11,10 @@ ROOT="${MODELS_ROOT:-$(pwd)/deploy_models}"
 mkdir -p "$ROOT"
 echo "[provision] 目标目录: $ROOT"
 
+# CN 网络：huggingface 不可达，走 hf-mirror；pip 走 aliyun 镜像
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+PIP_MIRROR="-i https://mirrors.aliyun.com/pypi/simple/"
+
 # ── CosyVoice2 ──
 if [ ! -d "$ROOT/CosyVoice" ]; then
   echo "[provision] 克隆 CosyVoice ..."
@@ -18,8 +22,8 @@ if [ ! -d "$ROOT/CosyVoice" ]; then
   ( cd "$ROOT/CosyVoice" && git submodule update --init --recursive )
 fi
 if [ ! -d "$ROOT/CosyVoice/pretrained_models/CosyVoice2-0.5B" ]; then
-  echo "[provision] 下载 CosyVoice2-0.5B 权重（~2GB）..."
-  pip install -q modelscope 2>/dev/null || true
+  echo "[provision] 下载 CosyVoice2-0.5B 权重（~2GB，modelscope）..."
+  pip install -q $PIP_MIRROR modelscope 2>/dev/null || true
   python -c "from modelscope import snapshot_download; snapshot_download('iic/CosyVoice2-0.5B', local_dir='$ROOT/CosyVoice/pretrained_models/CosyVoice2-0.5B')" \
     || echo "[warn] CosyVoice2 权重下载失败，请手动放到 $ROOT/CosyVoice/pretrained_models/CosyVoice2-0.5B"
 fi
@@ -30,9 +34,9 @@ if [ ! -d "$ROOT/LatentSync" ]; then
   git clone https://github.com/bytedance/LatentSync.git "$ROOT/LatentSync"
 fi
 if [ ! -f "$ROOT/LatentSync/checkpoints/latentsync_unet.pt" ]; then
-  echo "[provision] 下载 LatentSync 权重（~5GB，含 whisper）..."
-  pip install -q "huggingface_hub[cli]" 2>/dev/null || true
-  huggingface-cli download ByteDance/LatentSync-1.5 --local-dir "$ROOT/LatentSync/checkpoints" \
+  echo "[provision] 下载 LatentSync 权重（~5GB，含 whisper，走 hf-mirror）..."
+  pip install -q $PIP_MIRROR "huggingface_hub[cli]" 2>/dev/null || true
+  HF_ENDPOINT="$HF_ENDPOINT" huggingface-cli download ByteDance/LatentSync-1.5 --local-dir "$ROOT/LatentSync/checkpoints" \
     || echo "[warn] LatentSync 权重下载失败，请按官方 README 放到 $ROOT/LatentSync/checkpoints"
 fi
 

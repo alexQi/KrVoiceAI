@@ -2,7 +2,9 @@
 # 仓库+依赖 baked 进镜像（可复现）；权重体积大，走宿主 volume 挂载到 /opt/LatentSync/checkpoints
 FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
 
-ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    HF_ENDPOINT=https://hf-mirror.com
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ffmpeg libgl1 libglib2.0-0 libsndfile1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
