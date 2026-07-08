@@ -255,6 +255,9 @@ class AvatarEngine(BaseModule):
                 video_path = self._generate_wav2lip(ctx, avatar_id, output_path)
             elif self.provider == "mock":
                 video_path = self._generate_mock(ctx, avatar_id, output_path)
+            elif self.provider == "latentsync" and self.config.get("avatar.sharding.enabled", False):
+                # M2：单条视频多卡分片（按句子分段并发分发到多个 worker）
+                video_path = self._generate_sharded(ctx, avatar_id, output_path)
             else:
                 video_path = self._generate_cloud(ctx, avatar_id, output_path)
 
@@ -616,6 +619,92 @@ class AvatarEngine(BaseModule):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(base64.b64decode(video_b64))
         self.logger.info(f"云端数字人生成完成 video={output_path}")
+        return output_path
+
+    def _generate_sharded(
+        self, ctx: JobContext, avatar_id: str, output_path: Path
+    ) -> Path:
+        """M2：一条视频的音频按句子分成 K 段，并发分发到多个 avatar worker，拼接成片。"""
+        import base64
+        import subprocess
+        from concurrent.futures import ThreadPoolExecutor
+        from ..core.gpu_pool import GPUWorkerPool
+        from ..core.sharding import plan_segments, slice_audio
+
+        pool = GPUWorkerPool()
+        if pool.size <= 1:
+            self.logger.info("worker 池 ≤1，退回整条生成")
+            pool.close()
+            return self._generate_cloud(ctx, avatar_id, output_path)
+
+        ls_cfg = self.config.get("avatar.latentsync", {}) or {}
+        sh_cfg = self.config.get("avatar.sharding", {}) or {}
+        steps = ls_cfg.get("inference_steps", 25)
+        resolution = ls_cfg.get("resolution", 512)
+        config_name = ls_cfg.get("config", "high_quality")
+        seed = ls_cfg.get("seed", 1247)
+        min_seg = float(sh_cfg.get("min_seg_sec", 2.5))
+        target = sh_cfg.get("target_segments") or pool.size
+
+        timestamps = ctx.metadata.get("tts_timestamps") or []
+        segments = plan_segments(timestamps, ctx.audio_duration, pool.size, min_seg, target)
+        self.logger.info(f"多卡分片：{len(segments)} 段 → {pool.size} 个 worker 并发")
+
+        seg_dir = ctx.work_dir / "shards"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        payloads = []
+        for sh in segments:
+            wav = slice_audio(ctx.audio_path, sh["t_start"], sh["t_end"],
+                              seg_dir / f"a_{sh['seg_index']}.wav")
+            payloads.append({
+                "audio_base64": base64.b64encode(wav.read_bytes()).decode(),
+                "avatar_id": avatar_id,
+                "ref_start": sh["ref_start"], "ref_end": sh["ref_end"],
+                "seg_index": sh["seg_index"], "inference_steps": steps,
+                "resolution": resolution, "config_name": config_name, "seed": seed,
+            })
+
+        # 并发分发到 worker 池（每段选在途最少的 worker，失败重派）
+        results: dict[int, bytes] = {}
+        errors: list[str] = []
+
+        def _run(p):
+            r = pool.submit_segment(p)
+            return p["seg_index"], base64.b64decode(r["video_base64"])
+
+        try:
+            with ThreadPoolExecutor(max_workers=pool.size) as ex:
+                for fut in [ex.submit(_run, p) for p in payloads]:
+                    try:
+                        idx, vid = fut.result()
+                        results[idx] = vid
+                    except Exception as e:
+                        errors.append(str(e))
+        finally:
+            pool.close()
+        if errors or len(results) != len(segments):
+            raise RuntimeError(
+                f"分片生成失败：{errors[:3]}（成功 {len(results)}/{len(segments)}）")
+
+        # 按序写段视频 → concat 拼接 → 用整条 TTS 音频覆盖（零漂移）
+        seg_files = []
+        for i in sorted(results):
+            f = seg_dir / f"v_{i}.mp4"
+            f.write_bytes(results[i])
+            seg_files.append(f)
+        list_file = seg_dir / "concat.txt"
+        list_file.write_text("".join(f"file '{f.absolute()}'\n" for f in seg_files))
+        concat_tmp = seg_dir / "concat.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(concat_tmp)],
+            capture_output=True, check=True)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(concat_tmp), "-i", str(ctx.audio_path),
+             "-map", "0:v", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac",
+             "-shortest", str(output_path)],
+            capture_output=True, check=True)
+        self.logger.info(f"多卡分片拼接完成 → {output_path.name}")
         return output_path
 
     def _generate_mock(

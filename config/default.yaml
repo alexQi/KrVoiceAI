@@ -131,6 +131,11 @@ avatar:
     inference_steps: 25   # 扩散步数（25 平衡，50 最高质量，10 最快）
     resolution: 512       # 处理分辨率（512 推荐，256 更快）
     seed: -1              # 随机种子（-1 随机）
+  # M2 单条视频多卡分片：按句子分段并发分发到多个 avatar worker（provider=latentsync 时生效）
+  sharding:
+    enabled: false        # 默认关；8 卡部署时在 user_config/env 打开
+    min_seg_sec: 2.5      # 最小段时长（太短段扩散效率低）
+    target_segments: null # 目标段数（null=worker 数）
 
 # ASR 配置（字幕/文案提取）
 asr:
@@ -461,5 +466,8 @@ gpu_runner:
   # 云 GPU 服务地址（TTS + Avatar API）
   tts_endpoint: http://localhost:9880
   avatar_endpoint: http://localhost:8010
+  # M2 多卡 worker 池：avatar worker 端点列表（每卡一个），用于单条视频分片并发
+  # 例：[http://avatar-0:8010, http://avatar-1:8010, ...]；空则回退单端点 avatar_endpoint
+  avatar_workers: []
   # 健康检查超时
   health_check_timeout: 10
